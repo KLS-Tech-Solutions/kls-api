@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: kls_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kls
+      POSTGRES_PASSWORD: kls_dev_password
+      POSTGRES_DB: kls_academy
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kls -d kls_academy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    container_name: kls_api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Overrides .env so the container reaches Postgres by service name.
+      DATABASE_URL: postgresql+psycopg://kls:kls_dev_password@db:5432/kls_academy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/code/app
+      - ./alembic:/code/alembic
+      - ./scripts:/code/scripts
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+volumes:
+  postgres_data:
