@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
-    EMAIL_FROM: str = "KLS Academy <noreply@klstechsolutions.in>"
+    EMAIL_FROM: str = "KLS Academy <klstechsolutions2025@gmail.com>"
 
     # --- public URLs -------------------------------------------------------
     ACADEMY_BASE_URL: str = "http://localhost:3000"
@@ -73,6 +73,32 @@ class Settings(BaseSettings):
     @property
     def payments_configured(self) -> bool:
         return bool(self.RAZORPAY_KEY_ID and self.RAZORPAY_KEY_SECRET)
+
+
+    def validate_for_runtime(self) -> list[str]:
+        """
+        Configuration problems worth refusing to start over, or at least
+        shouting about. Called once from `app.main` on startup.
+        """
+        problems: list[str] = []
+
+        if self.SECRET_KEY == "change-me-in-every-environment":
+            problems.append(
+                "SECRET_KEY is still the placeholder. Generate one with: "
+                "python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            )
+        elif len(self.SECRET_KEY) < 32:
+            problems.append("SECRET_KEY is shorter than 32 characters")
+
+        if self.is_production:
+            if self.DEBUG:
+                problems.append("DEBUG must be false in production")
+            if any(o.startswith("http://") for o in self.CORS_ORIGINS):
+                problems.append("CORS_ORIGINS contains a plain-http origin")
+            if self.FIRST_SUPERADMIN_PASSWORD == "ChangeThisNow123":
+                problems.append("FIRST_SUPERADMIN_PASSWORD is still the placeholder")
+
+        return problems
 
 
 @lru_cache

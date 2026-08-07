@@ -45,10 +45,6 @@ from app.services.storage import StorageError, save_screenshot
 
 router = APIRouter(tags=["student"])
 
-MIN_SCREENSHOTS = 3
-MAX_SCREENSHOTS = 8
-
-
 @router.post("/enrollments", status_code=status.HTTP_201_CREATED)
 def enroll(
     payload: EnrollRequest,
@@ -156,8 +152,8 @@ def submit_linkedin(
 async def submit_task(
     task_id: uuid.UUID = Form(...),
     title: str = Form(..., min_length=5, max_length=200),
-    github_url: str = Form(...),
-    description: str = Form(..., min_length=120),
+    github_url: str = Form(""),
+    description: str = Form(""),
     live_demo_url: str | None = Form(None),
     screenshots: list[UploadFile] = File(...),
     student: User = Depends(get_current_student),
@@ -178,25 +174,77 @@ async def submit_task(
     if enrollment is None or task.batch_id != enrollment.batch_id:
         raise HTTPException(status_code=403, detail="This task is not part of your internship")
 
-    if not (MIN_SCREENSHOTS <= len(screenshots) <= MAX_SCREENSHOTS):
+    if not task.is_active:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=[
-                {
-                    "loc": ["body", "screenshots"],
-                    "msg": f"Attach between {MIN_SCREENSHOTS} and {MAX_SCREENSHOTS} screenshots",
-                    "type": "value_error",
-                }
-            ],
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This task is not currently open for submission",
         )
 
-    # Tasks are sequential — the previous one must be approved first.
-    previous = db.scalar(
-        select(Task).where(
-            Task.batch_id == task.batch_id, Task.order_number == task.order_number - 1
+    # Every rule below is configured per task by a super admin, so a domain
+    # can require different evidence without a code change.
+    issues: list[dict[str, object]] = []
+    attached = [f for f in screenshots if f and f.filename]
+
+    if not (task.min_screenshots <= len(attached) <= task.max_screenshots):
+        issues.append(
+            {
+                "loc": ["body", "screenshots"],
+                "msg": (
+                    f"Attach between {task.min_screenshots} and "
+                    f"{task.max_screenshots} screenshots"
+                ),
+                "type": "value_error",
+            }
         )
+
+    if task.require_github and not github_url.strip():
+        issues.append(
+            {
+                "loc": ["body", "github_url"],
+                "msg": "A public GitHub repository is required for this task",
+                "type": "value_error",
+            }
+        )
+
+    if task.require_explanation and len(description.strip()) < task.min_explanation_chars:
+        issues.append(
+            {
+                "loc": ["body", "description"],
+                "msg": (
+                    f"Explain your implementation in at least "
+                    f"{task.min_explanation_chars} characters"
+                ),
+                "type": "value_error",
+            }
+        )
+
+    if task.require_live_demo and not (live_demo_url or "").strip():
+        issues.append(
+            {
+                "loc": ["body", "live_demo_url"],
+                "msg": "A live demo URL is required for this task",
+                "type": "value_error",
+            }
+        )
+
+    if issues:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=issues
+        )
+
+    # Tasks are sequential. Disabled tasks are skipped, so parking one does
+    # not strand every student behind it.
+    previous = db.scalar(
+        select(Task)
+        .where(
+            Task.batch_id == task.batch_id,
+            Task.order_number < task.order_number,
+            Task.order_number > 0,
+            Task.is_active.is_(True),
+        )
+        .order_by(Task.order_number.desc())
     )
-    if previous is not None and previous.order_number > 0:
+    if previous is not None:
         previous_ok = db.scalar(
             select(TaskSubmission.id).where(
                 TaskSubmission.student_id == student.id,
@@ -242,7 +290,7 @@ async def submit_task(
     db.flush()
 
     try:
-        for index, upload in enumerate(screenshots, start=1):
+        for index, upload in enumerate(attached, start=1):
             url = save_screenshot(upload, submission.id, index)
             db.add(
                 TaskScreenshot(

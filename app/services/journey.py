@@ -86,9 +86,15 @@ def compute_stage(db: Session, student_id: uuid.UUID) -> JourneyStage:
         return JourneyStage.PAID
 
     # --- tasks ------------------------------------------------------------
+    # Disabled tasks are excluded everywhere: a task parked by an admin must
+    # not keep a student from completing their internship.
     technical_task_ids = list(
         db.scalars(
-            select(Task.id).where(Task.batch_id == enrollment.batch_id, Task.order_number > 0)
+            select(Task.id).where(
+                Task.batch_id == enrollment.batch_id,
+                Task.order_number > 0,
+                Task.is_active.is_(True),
+            )
         )
     )
 

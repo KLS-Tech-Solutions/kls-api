@@ -3,6 +3,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Date,
     DateTime,
     Enum,
@@ -36,6 +37,9 @@ class InternshipDomain(Base, UUIDMixin, TimestampMixin):
     )
     # Presentation fields the marketing pages render.
     icon: Mapped[str] = mapped_column(String(40), default="code", nullable=False)
+    image_url: Mapped[str | None] = mapped_column(String(500))
+    # Controls the order domains appear in on the public site and enrol screen.
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     outcomes: Mapped[list[str]] = mapped_column(JSON, default=list)
     skills: Mapped[list[str]] = mapped_column(JSON, default=list)
 
@@ -113,5 +117,17 @@ class Task(Base, UUIDMixin, TimestampMixin):
     deadline: Mapped[date | None] = mapped_column(Date)
     estimated_hours: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
     requirements: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    # --- submission rules, configured per task ---------------------------
+    # A disabled task is hidden from students and skipped by the journey
+    # engine, so it can be parked without deleting submission history.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    instructions: Mapped[str | None] = mapped_column(Text)
+    min_screenshots: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    max_screenshots: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    require_github: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    require_explanation: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    min_explanation_chars: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
+    require_live_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     batch: Mapped[InternshipBatch] = relationship(back_populates="tasks")

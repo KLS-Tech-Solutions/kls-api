@@ -11,6 +11,15 @@ from app.core.config import settings
 
 logging.basicConfig(level=logging.INFO if settings.DEBUG else logging.WARNING)
 
+_problems = settings.validate_for_runtime()
+if _problems:
+    message = "Configuration problems:\n  - " + "\n  - ".join(_problems)
+    if settings.is_production:
+        # Refuse to serve traffic with a guessable signing key.
+        raise RuntimeError(message)
+    logging.warning(message)
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="1.0.0",
@@ -43,6 +52,37 @@ async def validation_handler(_: Request, exc: RequestValidationError):
         # jsonable_encoder strips the raw exception objects Pydantic puts in ctx.
         content={"detail": jsonable_encoder(exc.errors())},
     )
+
+
+@app.on_event("startup")
+def check_database_connection() -> None:
+    """
+    Fail loudly and specifically on startup rather than returning a 500 from
+    the first login attempt. A wrong password in DATABASE_URL is otherwise
+    indistinguishable from "the login endpoint is broken".
+    """
+    from sqlalchemy import text
+
+    from app.core.database import engine
+
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        logging.info("Database connection OK")
+    except Exception as exc:  # noqa: BLE001
+        logging.error(
+            "\n"
+            "=========================================================\n"
+            " Cannot connect to the database.\n"
+            "\n"
+            " %s\n"
+            "\n"
+            " Check DATABASE_URL in .env. Special characters in the\n"
+            " password must be percent-encoded ONCE:\n"
+            "   @ -> %%40    # -> %%23    / -> %%2F    : -> %%3A\n"
+            "=========================================================",
+            exc,
+        )
 
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)

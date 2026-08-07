@@ -34,6 +34,7 @@ from app.schemas.internship import (
     CertificateOut,
     DomainCreate,
     DomainOut,
+    DomainReorder,
     DomainUpdate,
     JourneyOut,
     LinkedInSubmissionOut,
@@ -325,6 +326,33 @@ def delete_domain(
     db.commit()
 
 
+@router.post("/internship-domains/reorder", response_model=list[DomainOut])
+def reorder_domains(
+    payload: DomainReorder,
+    _: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Rewrites display_order from the supplied sequence."""
+    domains = {d.id: d for d in db.scalars(select(InternshipDomain))}
+    if set(payload.domain_ids) != set(domains):
+        raise HTTPException(
+            status_code=422, detail="Send every domain id exactly once"
+        )
+
+    for position, domain_id in enumerate(payload.domain_ids, start=1):
+        domains[domain_id].display_order = position
+    db.commit()
+
+    return [
+        domain_out(db, d)
+        for d in db.scalars(
+            select(InternshipDomain).order_by(
+                InternshipDomain.display_order, InternshipDomain.title
+            )
+        )
+    ]
+
+
 @router.post("/internship-batches", response_model=BatchOut, status_code=201)
 def create_batch(
     payload: BatchCreate,
@@ -361,6 +389,7 @@ def list_tasks(
     _: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
+    """Includes disabled tasks — an admin needs to see what they parked."""
     return list(
         db.scalars(select(Task).where(Task.batch_id == batch_id).order_by(Task.order_number))
     )

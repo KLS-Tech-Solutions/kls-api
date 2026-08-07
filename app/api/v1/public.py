@@ -22,7 +22,9 @@ def list_domains(status_filter: str | None = None, db: Session = Depends(get_db)
     query = select(InternshipDomain)
     if status_filter != "all":
         query = query.where(InternshipDomain.status == PublishStatus.ACTIVE)
-    domains = db.scalars(query.order_by(InternshipDomain.title))
+    domains = db.scalars(
+        query.order_by(InternshipDomain.display_order, InternshipDomain.title)
+    )
     return [domain_out(db, d) for d in domains]
 
 

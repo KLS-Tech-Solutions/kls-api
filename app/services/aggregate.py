@@ -42,7 +42,11 @@ def domain_out(db: Session, domain: InternshipDomain) -> DomainOut:
     task_count = db.scalar(
         select(func.count(Task.id))
         .join(InternshipBatch, Task.batch_id == InternshipBatch.id)
-        .where(InternshipBatch.domain_id == domain.id, Task.order_number > 0)
+        .where(
+            InternshipBatch.domain_id == domain.id,
+            Task.order_number > 0,
+            Task.is_active.is_(True),
+        )
     )
     data = DomainOut.model_validate(domain)
     data.task_count = task_count or 0
@@ -126,7 +130,7 @@ def build_journey(db: Session, student: User) -> JourneyOut:
         list(
             db.scalars(
                 select(Task)
-                .where(Task.batch_id == enrollment.batch_id)
+                .where(Task.batch_id == enrollment.batch_id, Task.is_active.is_(True))
                 .order_by(Task.order_number)
             )
         )

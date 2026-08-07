@@ -8,7 +8,12 @@ from app.core.database import Base
 import app.models  # noqa: F401  — registers every table on Base.metadata
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+
+# Alembic reads alembic.ini through ConfigParser, which treats "%" as the start
+# of an interpolation token. A password containing an escaped character (say
+# "%40" for "@") would blow up or silently mangle, so the "%" is doubled here
+# rather than in .env — the .env value stays a correct, normal URL.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

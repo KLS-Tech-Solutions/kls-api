@@ -69,7 +69,9 @@ def my_tasks(student: User = Depends(get_current_student), db: Session = Depends
         return []
     return list(
         db.scalars(
-            select(Task).where(Task.batch_id == enrollment.batch_id).order_by(Task.order_number)
+            select(Task)
+            .where(Task.batch_id == enrollment.batch_id, Task.is_active.is_(True))
+            .order_by(Task.order_number)
         )
     )
 

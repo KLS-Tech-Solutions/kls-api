@@ -26,6 +26,8 @@ class DomainOut(ORMModel):
     difficulty: Difficulty
     status: PublishStatus
     icon: str
+    image_url: str | None = None
+    display_order: int = 0
     outcomes: list[str] = []
     skills: list[str] = []
     task_count: int = 0
@@ -38,6 +40,8 @@ class DomainCreate(BaseModel):
     duration: str = Field(min_length=2, max_length=40)
     difficulty: Difficulty
     icon: str = "code"
+    image_url: str | None = None
+    display_order: int = Field(default=0, ge=0)
     outcomes: list[str] = []
     skills: list[str] = []
     status: PublishStatus = PublishStatus.ACTIVE
@@ -49,9 +53,17 @@ class DomainUpdate(BaseModel):
     duration: str | None = None
     difficulty: Difficulty | None = None
     icon: str | None = None
+    image_url: str | None = None
+    display_order: int | None = Field(default=None, ge=0)
     outcomes: list[str] | None = None
     skills: list[str] | None = None
     status: PublishStatus | None = None
+
+
+class DomainReorder(BaseModel):
+    """Full ordered list of domain ids — avoids gaps and duplicate positions."""
+
+    domain_ids: list[uuid.UUID]
 
 
 class BatchOut(ORMModel):
@@ -91,9 +103,30 @@ class TaskOut(ORMModel):
     deadline: date | None
     estimated_hours: int
     requirements: list[str] = []
+    is_active: bool = True
+    instructions: str | None = None
+    min_screenshots: int = 3
+    max_screenshots: int = 8
+    require_github: bool = True
+    require_explanation: bool = True
+    min_explanation_chars: int = 120
+    require_live_demo: bool = False
 
 
-class TaskCreate(BaseModel):
+class TaskConfig(BaseModel):
+    """Submission rules a super admin sets per task."""
+
+    is_active: bool = True
+    instructions: str | None = None
+    min_screenshots: int = Field(default=3, ge=0, le=20)
+    max_screenshots: int = Field(default=8, ge=1, le=20)
+    require_github: bool = True
+    require_explanation: bool = True
+    min_explanation_chars: int = Field(default=120, ge=0, le=5000)
+    require_live_demo: bool = False
+
+
+class TaskCreate(TaskConfig):
     batch_id: uuid.UUID
     title: str = Field(min_length=3, max_length=200)
     description: str = Field(min_length=10)
@@ -110,6 +143,14 @@ class TaskUpdate(BaseModel):
     deadline: date | None = None
     estimated_hours: int | None = None
     requirements: list[str] | None = None
+    is_active: bool | None = None
+    instructions: str | None = None
+    min_screenshots: int | None = Field(default=None, ge=0, le=20)
+    max_screenshots: int | None = Field(default=None, ge=1, le=20)
+    require_github: bool | None = None
+    require_explanation: bool | None = None
+    min_explanation_chars: int | None = Field(default=None, ge=0, le=5000)
+    require_live_demo: bool | None = None
 
 
 class TaskReorder(BaseModel):
