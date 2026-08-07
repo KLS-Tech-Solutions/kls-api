@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>{{ base_css }}</style>
+    <style>
+      .ref { margin-top: 12mm; font-size: 10pt; color: #7b8b99; }
+      .salutation { margin-top: 10mm; font-size: 12pt; color: #0a1a2b; }
+      .body p { margin: 0 0 4mm; }
+      .highlight { color: #0a1a2b; font-weight: bold; }
+      .terms {
+        margin-top: 8mm;
+        background: #f7fafc;
+        border-radius: 3mm;
+        padding: 6mm 7mm;
+      }
+      .terms h3 { font-size: 11pt; margin-bottom: 3mm; }
+      .terms ul { margin: 0; padding-left: 5mm; }
+      .terms li { margin-bottom: 2mm; }
+      .sign { margin-top: 14mm; }
+      .sign .name { color: #0a1a2b; font-weight: bold; font-size: 11pt; }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="accent-bar"></div>
+
+      <div class="header">
+        <img class="logo" src="{{ logo_url }}" alt="KLS Solutions" />
+        <div class="meta">
+          <div>Ref: <span class="mono">{{ offer_number }}</span></div>
+          <div>Date: {{ issued_on }}</div>
+        </div>
+      </div>
+
+      <h1 style="margin-top: 14mm; font-size: 20pt;">Internship Offer Letter</h1>
+
+      <p class="salutation">Dear {{ student_name }},</p>
+
+      <div class="body" style="margin-top: 5mm;">
+        <p>
+          We are pleased to offer you a position as a
+          <span class="highlight">Virtual Intern</span> in
+          <span class="highlight">{{ domain_title }}</span> with KLS Academy, the
+          learning division of KLS Tech Solutions, an MSME registered organisation.
+        </p>
+        <p>
+          This internship runs for {{ duration }} and is conducted entirely remotely as
+          part of {{ batch_name }}. You will complete {{ task_count }} structured
+          technical tasks, each reviewed by a KLS engineer before approval.
+        </p>
+        <p>
+          On successful completion of all assigned tasks, you will receive a QR-verified
+          certificate of completion that any employer can independently verify.
+        </p>
+      </div>
+
+      <div class="terms">
+        <h3>What this internship involves</h3>
+        <ul>
+          <li>Fully remote and self-paced within the batch window</li>
+          <li>Each task requires a public repository, a minimum of three screenshots and a written explanation</li>
+          <li>Submissions are reviewed by a KLS engineer and returned with feedback if changes are needed</li>
+          <li>The internship is free; a one-time fee of ₹50 applies only when your certificate is issued</li>
+          <li>This is a learning engagement and does not constitute an offer of employment</li>
+        </ul>
+      </div>
+
+      <div class="sign">
+        <p style="margin: 0 0 6mm;">We look forward to seeing what you build.</p>
+        <div class="name">KLS Tech Solutions</div>
+        <div>Bengaluru, India · MSME registered</div>
+      </div>
+
+      <div class="footer">
+        <div>
+          <div>KLS Academy · {{ academy_url }}</div>
+          <div class="mono">{{ offer_number }}</div>
+        </div>
+        <img class="msme" src="{{ msme_url }}" alt="Ministry of MSME" />
+      </div>
+    </div>
+  </body>
+</html>

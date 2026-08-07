@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
@@ -13,6 +13,7 @@ from app.models import (
     Enrollment,
     EnrollmentStatus,
     InternshipBatch,
+    InternshipDomain,
     JourneyStage,
     LinkedInSubmission,
     NotificationType,
@@ -38,7 +39,8 @@ from app.schemas.internship import (
 from app.services.aggregate import submission_out
 from app.services.journey import compute_stage, get_active_enrollment, has_reached
 from app.services.notifications import log_activity, notify
-from app.services.numbering import next_offer_letter_number
+from app.services.documents import generate_certificate, generate_offer_letter
+from app.services.numbering import next_certificate_number, next_offer_letter_number
 from app.services.storage import StorageError, save_screenshot
 
 router = APIRouter(tags=["student"])
@@ -70,12 +72,29 @@ def enroll(
     db.flush()
 
     # The offer letter is generated immediately — PRD business rule.
+    domain = db.get(InternshipDomain, batch.domain_id)
+    task_count = db.scalar(
+        select(func.count(Task.id)).where(Task.batch_id == batch.id, Task.order_number > 0)
+    ) or 0
+
     offer_letter = OfferLetter(
         student_id=student.id,
         batch_id=batch.id,
         offer_letter_number=next_offer_letter_number(db),
     )
     db.add(offer_letter)
+
+    try:
+        offer_letter.pdf_url = generate_offer_letter(
+            offer_number=offer_letter.offer_letter_number,
+            student_name=student.full_name,
+            domain_title=domain.title if domain else "KLS Academy Internship",
+            duration=domain.duration if domain else "",
+            batch_name=batch.batch_name,
+            task_count=task_count,
+        )
+    except Exception:  # noqa: BLE001 — enrolment must not fail on a render error
+        offer_letter.pdf_url = None
 
     notify(
         db,
@@ -343,8 +362,59 @@ def verify_payment(
         NotificationType.PAYMENT,
     )
     log_activity(db, student.id, "Paid certificate fee", "payment", str(payment.id))
+    db.flush()
+
+    _issue_certificate(db, student, payment)
+
     db.commit()
     db.refresh(payment)
-
-    # Certificate issuance runs here in Phase 6, once the PDF service exists.
     return payment
+
+
+def _issue_certificate(db: Session, student: User, payment: Payment) -> None:
+    """
+    Runs inside the payment transaction. A student who has paid must end up
+    with a certificate record even if PDF rendering fails — the file can be
+    regenerated, a missing record cannot be reconstructed.
+    """
+    existing = db.scalar(
+        select(Certificate).where(Certificate.student_id == student.id)
+    )
+    if existing is not None:
+        return
+
+    enrollment = get_active_enrollment(db, student.id)
+    batch = db.get(InternshipBatch, enrollment.batch_id) if enrollment else None
+    domain = db.get(InternshipDomain, batch.domain_id) if batch else None
+
+    certificate = Certificate(
+        student_id=student.id,
+        enrollment_id=enrollment.id if enrollment else None,
+        payment_id=payment.id,
+        certificate_number=next_certificate_number(db),
+    )
+    db.add(certificate)
+
+    try:
+        certificate_url, qr_url = generate_certificate(
+            certificate_number=certificate.certificate_number,
+            student_name=student.full_name,
+            domain_title=domain.title if domain else "KLS Academy Internship",
+            duration=domain.duration if domain else "",
+        )
+        certificate.certificate_url = certificate_url
+        certificate.qr_code_url = qr_url
+    except Exception:  # noqa: BLE001
+        pass
+
+    if enrollment is not None:
+        enrollment.status = EnrollmentStatus.COMPLETED
+        enrollment.completed_at = datetime.now(timezone.utc)
+
+    notify(
+        db,
+        student.id,
+        "Certificate issued",
+        f"Certificate {certificate.certificate_number} is ready to download.",
+        NotificationType.CERTIFICATE,
+    )

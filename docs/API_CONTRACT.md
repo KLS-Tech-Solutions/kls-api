@@ -25,6 +25,8 @@ call to `/me/journey` arrives at FastAPI as `GET /api/v1/me/journey`.
 | POST | `/auth/forgot-password` *(public)* | `{ email }` | `204` — always, even for unknown emails |
 | POST | `/auth/reset-password` *(public)* | `{ token, password }` | `204` |
 | POST | `/auth/verify-email` *(public)* | `{ token }` | `204` |
+| GET | `/auth/invite/{token}` *(public)* | — | `{ full_name, email, role }` · 400 if used/expired |
+| POST | `/auth/accept-invite` *(public)* | `{ token, password }` | `204` — sets the password and activates |
 
 `expires_in` is seconds. If omitted the frontend assumes 30 minutes.
 
@@ -99,6 +101,21 @@ the dashboard.
 | GET | `/me/notifications` | — | `AppNotification[]` |
 | PATCH | `/me/notifications/read` | `{ ids: string[] }` | `204` |
 | GET | `/me/certificate` | — | `Certificate` · `null` when not issued |
+
+### Team — super admin only
+
+| Method | Path | Body | Returns |
+| --- | --- | --- | --- |
+| GET | `/admin/admins` | — | `AdminAccount[]` |
+| POST | `/admin/admins/invite` | `{ full_name, email, role }` | `{ admin, invite_url, email_delivered }` |
+| PATCH | `/admin/admins/{id}` | `{ role?, status? }` | `AdminAccount` |
+
+An invitation creates a **pending** account with an unusable random password hash. The
+invitee sets their own password from the link, so no working credential is ever
+transmitted. `invite_url` is returned only while SMTP is unconfigured; once email
+delivery works it is `null`. Re-inviting the same address invalidates any previous link.
+A super admin cannot change their own role or status, and the last active super admin
+cannot be suspended.
 | POST | `/payments/order` | — | `{ order_id, amount, currency, key_id }` |
 | POST | `/payments/verify` | `{ razorpay_order_id, razorpay_payment_id, razorpay_signature }` | `Payment` |
 
@@ -154,6 +171,9 @@ point `API_BASE_URL` at the real backend and temporarily edit that one service's
 
 ## Known gaps
 
+- **Email delivery is not wired.** `app/services/email.py` records every message in
+  `email_logs` and returns the action link to the caller. Set `SMTP_HOST` and the flow
+  switches to real delivery with no call-site changes.
 - **Razorpay checkout is stubbed.** `/payments/order` and `/payments/verify` are wired,
   but the browser SDK that runs between them is not — `startPayment()` in
   `src/app/dashboard/payment/page.tsx` currently calls verify with a placeholder

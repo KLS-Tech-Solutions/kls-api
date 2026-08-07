@@ -294,7 +294,13 @@ def test_full_journey(client, db_session, catalogue, student_token, admin_token,
     )
     assert response.status_code == 200
     assert response.json()["payment_status"] == "success"
-    assert stage_of(client, student_token) == "paid"
+
+    # Paying issues the certificate, so the journey completes in one step.
+    assert stage_of(client, student_token) == "certificate_issued"
+
+    certificate = client.get("/api/v1/me/certificate", headers=student_headers).json()
+    assert certificate["certificate_number"].startswith("KLS-ACAD-")
+    assert certificate["student_name"] == "Ananya Rao"
 
     # 11 — the student got told at every step -------------------------------
     notifications = client.get("/api/v1/me/notifications", headers=student_headers).json()
@@ -303,6 +309,7 @@ def test_full_journey(client, db_session, catalogue, student_token, admin_token,
     assert "Offer letter generated" in titles
     assert "LinkedIn task approved" in titles
     assert "Payment successful" in titles
+    assert "Certificate issued" in titles
 
 
 def test_student_cannot_reach_admin_routes(client, student_token):
