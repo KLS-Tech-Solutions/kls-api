@@ -63,3 +63,25 @@ def save_screenshot(file: UploadFile, submission_id: uuid.UUID, order: int) -> s
 
 def save_document(data: bytes, folder: str, name: str) -> str:
     return upload_bytes(data, f"{folder}/{name}", "application/pdf")
+
+
+def read_bytes(url_or_key: str) -> bytes | None:
+    """
+    Reads a stored object back. Accepts either the URL we handed out or the
+    raw key, so callers do not have to care which storage backend produced it.
+    """
+    key = url_or_key
+    if key.startswith("/media/"):
+        key = key[len("/media/"):]
+    elif settings.R2_PUBLIC_BASE_URL and key.startswith(settings.R2_PUBLIC_BASE_URL):
+        key = key[len(settings.R2_PUBLIC_BASE_URL.rstrip("/")) + 1:]
+
+    if not settings.storage_configured:
+        path = MEDIA_ROOT / key
+        return path.read_bytes() if path.exists() else None
+
+    try:
+        response = _r2_client().get_object(Bucket=settings.R2_BUCKET, Key=key)
+        return response["Body"].read()
+    except Exception:  # noqa: BLE001 — a missing object is a normal outcome
+        return None

@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
@@ -14,6 +15,7 @@ from app.models import (
     Enrollment,
     EnrollmentStatus,
     InternshipBatch,
+    InternshipDomain,
     JourneyStage,
     LinkedInSubmission,
     Notification,
@@ -45,7 +47,9 @@ from app.schemas.internship import (
     TaskOut,
     TaskSubmissionOut,
 )
-from app.services.aggregate import build_journey, certificate_out, submission_out
+from app.services.aggregate import build_journey, certificate_out
+from app.services.documents import generate_certificate, generate_offer_letter
+from app.services.storage import read_bytes
 from app.services.journey import compute_stage, get_active_enrollment, has_reached
 from app.services.notifications import log_activity, notify
 from app.services.numbering import next_certificate_number, next_offer_letter_number
@@ -126,6 +130,119 @@ def mark_notifications_read(
         Notification.user_id == student.id, Notification.id.in_(payload.ids)
     ).update({Notification.is_read: True}, synchronize_session=False)
     db.commit()
+
+
+@router.get("/offer-letter/download")
+def download_offer_letter(
+    student: User = Depends(get_current_student), db: Session = Depends(get_db)
+):
+    """
+    Streams the offer letter PDF.
+
+    Regenerates it if the stored file is missing — which covers records created
+    before PDF rendering worked, and any file lost from storage. The database
+    record is the source of truth; the file is a rendering of it.
+    """
+    enrollment = get_active_enrollment(db, student.id)
+    offer_letter = (
+        db.scalar(
+            select(OfferLetter).where(
+                OfferLetter.student_id == student.id,
+                OfferLetter.batch_id == enrollment.batch_id,
+            )
+        )
+        if enrollment
+        else None
+    )
+
+    if offer_letter is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="You do not have an offer letter yet",
+        )
+
+    pdf = read_bytes(offer_letter.pdf_url) if offer_letter.pdf_url else None
+
+    if pdf is None or not offer_letter.pdf_url or not offer_letter.pdf_url.endswith(".pdf"):
+        batch = db.get(InternshipBatch, offer_letter.batch_id)
+        domain = db.get(InternshipDomain, batch.domain_id) if batch else None
+        task_count = db.scalar(
+            select(func.count(Task.id)).where(
+                Task.batch_id == offer_letter.batch_id,
+                Task.order_number > 0,
+                Task.is_active.is_(True),
+            )
+        ) or 0
+
+        offer_letter.pdf_url = generate_offer_letter(
+            offer_number=offer_letter.offer_letter_number,
+            student_name=student.full_name,
+            domain_title=domain.title if domain else "KLS Academy Internship",
+            duration=domain.duration if domain else "",
+            batch_name=batch.batch_name if batch else "",
+            task_count=task_count,
+            issued_on=offer_letter.generated_at,
+        )
+        db.commit()
+        pdf = read_bytes(offer_letter.pdf_url)
+
+    if pdf is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The offer letter could not be generated",
+        )
+
+    filename = f"KLS-Offer-Letter-{offer_letter.offer_letter_number.replace('/', '-')}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/certificate/download")
+def download_certificate(
+    student: User = Depends(get_current_student), db: Session = Depends(get_db)
+):
+    """Streams the certificate PDF, regenerating it if the file is missing."""
+    certificate = db.scalar(
+        select(Certificate).where(
+            Certificate.student_id == student.id,
+            Certificate.status == CertificateStatus.ISSUED,
+        )
+    )
+    if certificate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Your certificate has not been issued yet",
+        )
+
+    pdf = read_bytes(certificate.certificate_url) if certificate.certificate_url else None
+
+    if pdf is None or not (certificate.certificate_url or "").endswith(".pdf"):
+        data = certificate_out(db, certificate)
+        certificate.certificate_url, certificate.qr_code_url = generate_certificate(
+            certificate_number=certificate.certificate_number,
+            student_name=data.student_name or student.full_name,
+            domain_title=data.domain_title,
+            duration=data.duration,
+            issued_on=certificate.issued_at,
+        )
+        db.commit()
+        pdf = read_bytes(certificate.certificate_url)
+
+    if pdf is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The certificate could not be generated",
+        )
+
+    filename = f"KLS-Certificate-{certificate.certificate_number}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/certificate", response_model=CertificateOut | None)

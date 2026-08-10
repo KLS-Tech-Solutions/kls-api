@@ -1,5 +1,6 @@
 -r requirements.txt
 pytest==9.0.1
+pypdf==6.4.0            # asserts generated documents are real PDFs
 pytest-asyncio==1.3.0
 ruff==0.15.4
 mypy==1.19.0

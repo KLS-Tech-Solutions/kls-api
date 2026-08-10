@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -20,7 +21,44 @@ if _problems:
     logging.warning(message)
 
 
+def check_database_connection() -> None:
+    """
+    Fail loudly and specifically on startup rather than returning a 500 from
+    the first login attempt. A wrong password in DATABASE_URL is otherwise
+    indistinguishable from "the login endpoint is broken".
+    """
+    from sqlalchemy import text
+
+    from app.core.database import engine
+
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        logging.info("Database connection OK")
+    except Exception as exc:  # noqa: BLE001
+        logging.error(
+            "\n"
+            "=========================================================\n"
+            " Cannot connect to the database.\n"
+            "\n"
+            " %s\n"
+            "\n"
+            " Check DATABASE_URL in .env. Special characters in the\n"
+            " password must be percent-encoded ONCE:\n"
+            "   @ -> %%40    # -> %%23    / -> %%2F    : -> %%3A\n"
+            "=========================================================",
+            exc,
+        )
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    check_database_connection()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.PROJECT_NAME,
     version="1.0.0",
     description=(
@@ -54,35 +92,15 @@ async def validation_handler(_: Request, exc: RequestValidationError):
     )
 
 
-@app.on_event("startup")
-def check_database_connection() -> None:
-    """
-    Fail loudly and specifically on startup rather than returning a 500 from
-    the first login attempt. A wrong password in DATABASE_URL is otherwise
-    indistinguishable from "the login endpoint is broken".
-    """
-    from sqlalchemy import text
+# Local development fallback: when R2 is unconfigured, uploads land in ./media
+# and are served from here so the stored URLs actually resolve.
+if not settings.storage_configured:
+    from pathlib import Path
 
-    from app.core.database import engine
+    from fastapi.staticfiles import StaticFiles
 
-    try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-        logging.info("Database connection OK")
-    except Exception as exc:  # noqa: BLE001
-        logging.error(
-            "\n"
-            "=========================================================\n"
-            " Cannot connect to the database.\n"
-            "\n"
-            " %s\n"
-            "\n"
-            " Check DATABASE_URL in .env. Special characters in the\n"
-            " password must be percent-encoded ONCE:\n"
-            "   @ -> %%40    # -> %%23    / -> %%2F    : -> %%3A\n"
-            "=========================================================",
-            exc,
-        )
+    Path("media").mkdir(exist_ok=True)
+    app.mount("/media", StaticFiles(directory="media"), name="media")
 
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)

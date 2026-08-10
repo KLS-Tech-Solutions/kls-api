@@ -4,10 +4,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# WeasyPrint needs these to render the offer letter and certificate PDFs.
+# PDF rendering is pure Python now, so only the Postgres headers are needed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential libpq-dev libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
-      libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info \
+      build-essential libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code

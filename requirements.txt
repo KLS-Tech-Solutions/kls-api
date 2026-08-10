@@ -21,8 +21,9 @@ argon2-cffi==25.1.0
 boto3==1.42.7            # Cloudflare R2 (S3-compatible)
 razorpay==1.4.2
 qrcode[pil]==8.2
-weasyprint==67.0         # offer letter / certificate PDFs
-jinja2==3.1.6
+# Pure-Python PDF rendering — prebuilt wheels, no system libraries. Replaces
+# WeasyPrint, which needed GTK and did not install cleanly on Windows.
+reportlab==5.0.0
 
 # --- ops -------------------------------------------------------------------
 httpx==0.28.1

@@ -61,8 +61,8 @@ app/
 └── main.py
 alembic/           migrations
 scripts/seed.py    catalogue + first super admin
-tests/             28 tests, including a full journey walkthrough
-docs/              the API contract
+tests/             52 tests, including a full journey walkthrough
+docs/              API contract · local setup · external services · status
 ```
 
 ---
@@ -103,6 +103,7 @@ Frontend validation is a convenience. These are the rules that actually hold:
 | 3–8 screenshots, PNG/JPG/WebP, ≤5 MB each | `POST /task-submissions` → 422 |
 | Payment locked until every task is approved | `POST /payments/order` → 403 |
 | Certificate only after successful payment | `POST /payments/verify` |
+| Per-task submission rules (screenshots, GitHub, explanation) | `POST /task-submissions` → 422 |
 | Revoked certificates fail public verification | `GET /certificates/verify/{n}` → 404 |
 | Catalogue changes are super-admin only | `get_current_super_admin` |
 
@@ -129,7 +130,7 @@ on the domain. `order_number` 0 is reserved for the LinkedIn onboarding task.
 pytest
 ```
 
-28 tests on SQLite — no Postgres needed. `tests/test_journey.py` walks one student from
+52 tests on SQLite — no Postgres needed. `tests/test_journey.py` walks one student from
 registration to paid, asserting the stage after every step and checking that premature
 submissions, out-of-order tasks, duplicate enrolments and early payment are all refused.
 
@@ -153,13 +154,18 @@ Offer letters and certificates are generated automatically:
 - **A successful payment** issues the certificate, generates a QR code pointing at
   `/verify/{number}` on the academy site, and marks the enrolment complete.
 
-`app/services/documents.py` renders Jinja templates through WeasyPrint. **If WeasyPrint
-is unavailable it stores the rendered HTML instead and carries on** — a student who has
-paid must always end up with a certificate record. The file can be regenerated; a
-missing record cannot be reconstructed.
+`app/services/documents.py` renders both with **ReportLab** — pure Python with prebuilt
+wheels, so it works on Windows, macOS and Linux with no system libraries. WeasyPrint was
+replaced because it needs GTK, which does not install cleanly on Windows and silently
+downgraded documents to HTML.
 
-Brand assets are inlined as data URIs, so a document rendered on a private VPS still
-shows its logos without the API being publicly reachable.
+Documents carry the KLS lockup, the MSME mark and the **company seal** beside the
+signature. Assets live in `app/static/brand/`.
+
+**Downloads regenerate on demand.** `GET /me/offer-letter/download` and
+`GET /me/certificate/download` re-render the PDF if the stored file is missing or is not
+a PDF, then stream it. The database record is the source of truth; the file is a
+rendering of it, so a lost file is never a lost document.
 
 ## Administrator invitations
 
@@ -173,10 +179,11 @@ admin cannot be suspended — the platform can never be locked out of itself.
 
 ## Not built yet
 
-- **Email delivery** (Phase 8). `app/services/email.py` records every message in
-  `email_logs` and returns the action link to the caller, so invitations work today by
-  copying the link. Set `SMTP_HOST` and delivery switches on with no call-site changes.
-- **Razorpay webhook** for reconciling payments that complete out of band.
+- **Email delivery.** `app/services/email.py` records every message in `email_logs` and
+  returns the action link, so invitations work today by copying the link. Set `SMTP_HOST`
+  and delivery switches on with no call-site changes. See `docs/EXTERNAL_SERVICES.md`.
+- **Razorpay browser checkout and webhook.** Order creation and signature verification
+  are done; the `checkout.js` step between them is not.
 
 ---
 
@@ -185,9 +192,10 @@ admin cannot be suspended — the platform can never be locked out of itself.
 In `academy/.env.local`:
 
 ```bash
-NEXT_PUBLIC_USE_MOCKS=false
 API_BASE_URL=http://localhost:8000/api/v1
 ```
+
+There is no mock mode in either frontend — both read only from this API.
 
 The student app talks to FastAPI through its own Next proxy so the JWT stays in an
 httpOnly cookie. The admin app should do the same.
