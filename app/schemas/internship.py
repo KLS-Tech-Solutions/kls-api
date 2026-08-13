@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from app.models import (
     BatchStatus,
@@ -268,6 +268,17 @@ class CertificateOut(ORMModel):
     duration: str = ""
     batch_name: str = ""
 
+    @field_validator("student_name", mode="before")
+    @classmethod
+    def _name_never_null(cls, value: str | None) -> str:
+        """
+        `Certificate.student_name` is nullable — it snapshots the recipient at
+        issue and is null for certificates created before that column existed.
+        Both frontends type this as a string, so null becomes empty here and
+        `certificate_out` fills it from the user row.
+        """
+        return value or ""
+
 
 class ProfileOut(ORMModel):
     id: uuid.UUID
@@ -305,6 +316,34 @@ class MarkReadRequest(BaseModel):
     ids: list[uuid.UUID]
 
 
+class InternshipHistoryOut(BaseModel):
+    """
+    One past or present internship, with everything needed to render a history
+    card and re-download the documents. A student paid for these credentials;
+    they keep access to them for good.
+    """
+
+    enrollment_id: uuid.UUID
+    batch_id: uuid.UUID
+    batch_name: str
+    domain_title: str
+    domain_slug: str | None = None
+    duration: str | None = None
+    status: EnrollmentStatus
+    enrolled_at: datetime
+    completed_at: datetime | None = None
+    is_current: bool = False
+
+    tasks_total: int = 0
+    tasks_approved: int = 0
+
+    offer_letter_number: str | None = None
+    offer_letter_url: str | None = None
+    certificate_number: str | None = None
+    certificate_url: str | None = None
+    certificate_issued_at: datetime | None = None
+
+
 class JourneyOut(BaseModel):
     """
     The aggregate both dashboards render from. Field names match the frontend
@@ -324,3 +363,14 @@ class JourneyOut(BaseModel):
     payment: PaymentOut | None
     certificate: CertificateOut | None
     notifications: list[NotificationOut]
+    # In paise, read from the platform settings row. The checkout screen shows
+    # this rather than hardcoding an amount, so a super admin can change the
+    # fee without a deploy.
+    certificate_fee_paise: int = 0
+
+    # Every internship the student has taken, newest first — the current one
+    # included, flagged `is_current`. Drives the "My internships" screen.
+    history: list[InternshipHistoryOut] = []
+    # True once the current internship is certificated, which is when a
+    # student becomes eligible to start another.
+    can_enroll_again: bool = False

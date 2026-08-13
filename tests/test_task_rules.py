@@ -247,3 +247,125 @@ def test_disabled_task_does_not_block_completion(client, ready_student, screensh
         "/api/v1/me/journey", headers=auth_headers(ready_student["token"])
     ).json()
     assert journey["stage"] == "all_tasks_approved"
+
+
+def test_next_task_unlocks_on_submission_not_approval(
+    client, ready_student, screenshot_files
+):
+    """
+    A student who has submitted task 1 can start task 2 straight away.
+
+    Review latency must never be the thing that slows an internship down —
+    approval still gates the certificate, but not the next piece of work.
+    """
+    db, batch = ready_student["db"], ready_student["batch"]
+    first = add_task(db, batch, min_screenshots=1)
+
+    second = Task(
+        batch_id=batch.id,
+        title="Task 2",
+        description="Build the second thing.",
+        order_number=2,
+        min_screenshots=1,
+    )
+    db.add(second)
+    db.commit()
+
+    # Task 2 is locked before task 1 is submitted.
+    blocked = submit(client, ready_student["token"], second, screenshot_files[:1])
+    assert blocked.status_code == 403
+    assert "previous task" in blocked.json()["detail"].lower()
+
+    # Submit task 1 — deliberately leave it unreviewed.
+    submission = submit(client, ready_student["token"], first, screenshot_files[:1])
+    assert submission.status_code == 201
+    assert submission.json()["status"] == "under_review"
+
+    # Task 2 is now open, with no reviewer involved.
+    allowed = submit(client, ready_student["token"], second, screenshot_files[:1])
+    assert allowed.status_code == 201
+
+
+def test_a_rejected_task_still_unlocks_the_next_one(
+    client, ready_student, screenshot_files, db_session
+):
+    """
+    Being sent back on task 1 should not also block task 2 — the student can
+    keep moving while they revise.
+    """
+    from app.models import AdminProfile, User, UserRole, UserStatus
+
+    db, batch = ready_student["db"], ready_student["batch"]
+    first = add_task(db, batch, min_screenshots=1)
+    second = Task(
+        batch_id=batch.id,
+        title="Task 2",
+        description="Build the second thing.",
+        order_number=2,
+        min_screenshots=1,
+    )
+    db.add(second)
+    db.commit()
+
+    submission = submit(client, ready_student["token"], first, screenshot_files[:1])
+
+    admin = User(
+        full_name="Admin",
+        email="rejector@klsacademy.example.com",
+        phone="+919000000000",
+        password_hash=hash_password("admin12345"),
+        role=UserRole.SUPER_ADMIN,
+        status=UserStatus.ACTIVE,
+        email_verified=True,
+    )
+    db.add(admin)
+    db.flush()
+    db.add(AdminProfile(user_id=admin.id))
+    db.commit()
+
+    admin_token = client.post(
+        "/api/v1/auth/login",
+        json={"email": "rejector@klsacademy.example.com", "password": "admin12345"},
+    ).json()["access_token"]
+
+    client.post(
+        f"/api/v1/admin/task-submissions/{submission.json()['id']}/review",
+        headers=auth_headers(admin_token),
+        json={"status": "rejected", "remarks": "Repository is private."},
+    )
+
+    allowed = submit(client, ready_student["token"], second, screenshot_files[:1])
+    assert allowed.status_code == 201
+
+
+def test_certificate_still_requires_every_task_approved(
+    client, ready_student, screenshot_files
+):
+    """Submitting is enough to progress, but not enough to finish."""
+    db, batch = ready_student["db"], ready_student["batch"]
+    first = add_task(db, batch, min_screenshots=1)
+    second = Task(
+        batch_id=batch.id,
+        title="Task 2",
+        description="Build the second thing.",
+        order_number=2,
+        min_screenshots=1,
+    )
+    db.add(second)
+    db.commit()
+
+    submit(client, ready_student["token"], first, screenshot_files[:1])
+    submit(client, ready_student["token"], second, screenshot_files[:1])
+
+    journey = client.get(
+        "/api/v1/me/journey", headers=auth_headers(ready_student["token"])
+    ).json()
+    assert journey["stage"] == "tasks_in_progress"
+
+    # Payment is still shut until a reviewer has signed both off.
+    assert (
+        client.post(
+            "/api/v1/payments/order", headers=auth_headers(ready_student["token"])
+        ).status_code
+        == 403
+    )

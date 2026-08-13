@@ -73,9 +73,22 @@ trip rather than eight separate calls. Shape:
   "submissions": [ ... ],         // each with `screenshots[]` and `review` embedded
   "payment": { ... } | null,
   "certificate": { ... } | null,
-  "notifications": [ ... ]
+  "notifications": [ ... ],
+  "certificate_fee_paise": 5000,   // from platform_settings, never hardcoded
+  "history": [ ... ],              // every internship taken, newest first
+  "can_enroll_again": false        // true once the current one is certificated
 }
 ```
+
+**Everything above except `history` describes the *current* internship.** A student may
+take another once the current one is certificated, so `certificate`, `payment`,
+`submissions` and `linkedinSubmission` are all scoped to the current enrolment — a
+second internship starts genuinely empty.
+
+`history[]` entries carry `enrollment_id`, `domain_title`, `batch_name`, `status`,
+`is_current`, `tasks_approved`/`tasks_total`, and the `offer_letter_url` /
+`certificate_number` / `certificate_url` for that internship. Documents from every
+internship stay downloadable for good.
 
 `stage` must be one of, in order:
 
@@ -93,14 +106,39 @@ the dashboard.
 
 | Method | Path | Body | Returns |
 | --- | --- | --- | --- |
-| POST | `/enrollments` | `{ domain_id, batch_id }` | `201 { enrollment_id }` · `409` if already enrolled |
+| POST | `/enrollments` | `{ domain_id, batch_id }` | `201 { enrollment_id }` · `409` if the current internship is not yet certificated, or if that batch was already taken |
 | GET | `/me/tasks` | — | `Task[]` |
 | POST | `/linkedin-submissions` | `{ linkedin_post_url }` | `201 { id, status: "pending" }` |
 | POST | `/task-submissions` | **multipart** (below) | `201 { id, status: "under_review" }` |
 | PATCH | `/me/profile` | `ProfileValues` | `StudentProfile` |
 | GET | `/me/notifications` | — | `AppNotification[]` |
 | PATCH | `/me/notifications/read` | `{ ids: string[] }` | `204` |
-| GET | `/me/certificate` | — | `Certificate` · `null` when not issued |
+| GET | `/me/certificate` | — | `Certificate` for the **current** internship · `null` when not issued |
+| GET | `/me/offer-letter/download` | — | PDF for the current internship |
+| GET | `/me/certificate/download` | — | PDF for the current internship |
+| GET | `/me/internships/{enrollment_id}/offer-letter/download` | — | PDF · `404` if the enrolment is not the caller's |
+| GET | `/me/internships/{enrollment_id}/certificate/download` | — | PDF · `404` if the enrolment is not the caller's |
+| DELETE | `/me/account` | `{ password }` | `204` · `403` on a wrong password |
+
+**Documents from past internships.** A student may take another internship once the
+current one is certificated, and keeps lifetime access to everything earned. The
+enrolment-scoped download routes serve any internship the caller has taken; someone
+else's enrolment id returns `404`, not `403`, so ids cannot be probed.
+
+**Closing an account is a soft delete.** Login is blocked and personal data is scrubbed,
+but issued certificates stay publicly verifiable — `Certificate.student_name` snapshots
+the recipient at issue for exactly this reason.
+
+### Platform settings
+
+| Method | Path | Body | Returns | Who |
+| --- | --- | --- | --- | --- |
+| GET | `/admin/settings` | — | `{ certificate_fee_paise, min_fee_paise, max_fee_paise }` | any admin |
+| PATCH | `/admin/settings/certificate-fee` | `{ amount_paise }` | same shape | **super admin** |
+
+`amount_paise` is bounded to ₹1–₹50,000; outside that it is `422`. **Orders already
+created keep their own amount** — `Payment.amount` is written at order time and never
+re-read, so a fee change cannot reprice an in-flight checkout.
 
 ### Team — super admin only
 

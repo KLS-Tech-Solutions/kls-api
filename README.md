@@ -61,7 +61,7 @@ app/
 └── main.py
 alembic/           migrations
 scripts/seed.py    catalogue + first super admin
-tests/             52 tests, including a full journey walkthrough
+tests/             88 tests, including a full journey walkthrough
 docs/              API contract · local setup · external services · status
 ```
 
@@ -96,16 +96,42 @@ Frontend validation is a convenience. These are the rules that actually hold:
 
 | Rule | Where |
 | --- | --- |
-| One active internship per student | `POST /enrollments` → 409 |
+| One internship at a time, until it is certificated | `POST /enrollments` → 409 |
+| The same batch cannot be taken twice | `POST /enrollments` → 409 |
 | Offer letter generated on enrolment | `POST /enrollments`, same transaction |
 | Technical tasks locked until LinkedIn is approved | `POST /task-submissions` → 403 |
-| Tasks are sequential — previous must be approved | `POST /task-submissions` → 403 |
+| Tasks are sequential — previous must be **submitted** (not approved) | `POST /task-submissions` → 403 |
 | 3–8 screenshots, PNG/JPG/WebP, ≤5 MB each | `POST /task-submissions` → 422 |
 | Payment locked until every task is approved | `POST /payments/order` → 403 |
 | Certificate only after successful payment | `POST /payments/verify` |
 | Per-task submission rules (screenshots, GitHub, explanation) | `POST /task-submissions` → 422 |
 | Revoked certificates fail public verification | `GET /certificates/verify/{n}` → 404 |
 | Catalogue changes are super-admin only | `get_current_super_admin` |
+| Changing the certificate fee is super-admin only | `PATCH /admin/settings/certificate-fee` |
+| A closed account cannot sign in or be recovered by email | `UserStatus.DELETED` |
+
+The next task unlocks as soon as the previous one is **submitted**, so review latency
+never stalls a student. Approval still gates the certificate: `all_tasks_approved`
+requires every submission to be signed off.
+
+## More than one internship
+
+A student may take another internship **once the current one is certificated** —
+finished *and* paid for. Anything earlier and they would abandon a half-done journey.
+
+**Everything the journey reports is scoped to the current enrolment.** This is the part
+that breaks quietly: every query used to read by `student_id` alone, which was correct
+while a student could only hold one enrolment. The moment they can hold two, a
+student-wide certificate lookup makes a brand new internship report `certificate_issued`
+on day one. `compute_stage`, `build_journey`, `_issue_certificate` and the LinkedIn
+gate are all scoped now, and `tests/test_second_internship.py` pins it down.
+
+`journey.history` carries every internship taken, newest first, each with its offer
+letter and certificate URLs. Those stay downloadable for good, through
+`GET /me/internships/{enrollment_id}/{offer-letter,certificate}/download` — a student
+paid for the credential and does not lose access to it by moving on.
+
+---
 
 Task counts are **variable per domain** — the seed creates 3–4 technical tasks depending
 on the domain. `order_number` 0 is reserved for the LinkedIn onboarding task.
@@ -130,11 +156,38 @@ on the domain. `order_number` 0 is reserved for the LinkedIn onboarding task.
 pytest
 ```
 
-52 tests on SQLite — no Postgres needed. `tests/test_journey.py` walks one student from
+88 tests on SQLite — no Postgres needed. `tests/test_journey.py` walks one student from
 registration to paid, asserting the stage after every step and checking that premature
 submissions, out-of-order tasks, duplicate enrolments and early payment are all refused.
 
 ---
+
+## Runtime settings
+
+`platform_settings` is a key/value table for operational levers a super admin can change
+without a deploy. Currently one key: `certificate_fee_paise`.
+
+Each reader falls back to the `.env` value when the row does not exist, so a fresh
+database behaves exactly as it did before the table existed and seeding is not mandatory.
+
+**A payment keeps the price it was quoted.** `Payment.amount` is written at order time
+and never re-read, so a fee change mid-checkout cannot reprice an in-flight order.
+
+## Closing an account
+
+`DELETE /me/account` takes the current password — it is irreversible, and an unattended
+session should not be enough to trigger it.
+
+It is a **soft delete**. The user row survives as an anonymous shell so issued
+certificates keep a valid foreign key and stay publicly verifiable; an employer's
+verification link must not start 404ing because the student later closed their account.
+Removed: name, phone, the whole student profile, the password, and every outstanding
+email token. The address is replaced with `deleted+<id>@account.invalid`, which also
+releases the real one for re-registration.
+
+`Certificate.student_name` snapshots the recipient at issue for exactly this reason —
+without it, a scrubbed user row would make a paid-for credential verify as "Deleted
+user".
 
 ## Storage and payments degrade gracefully
 
@@ -159,8 +212,21 @@ wheels, so it works on Windows, macOS and Linux with no system libraries. WeasyP
 replaced because it needs GTK, which does not install cleanly on Windows and silently
 downgraded documents to HTML.
 
-Documents carry the KLS lockup, the MSME mark and the **company seal** beside the
-signature. Assets live in `app/static/brand/`.
+**Only the base-14 fonts are used** (Helvetica and Times). Shipping a font file would
+look marginally nicer and introduce a whole class of "why does the server output differ"
+bugs. A document renders identically on a developer's Windows machine and on the VPS.
+
+The **offer letter** is A4 portrait: a navy→blue letterhead band, a *Programme at a
+glance* table, a terms panel, and the company seal. The **certificate** is A4 landscape
+with a navy and gold frame, the seal ghosted at 4% as a watermark, and a QR pointing at
+the public verification page. Assets live in `app/static/brand/`.
+
+**Neither document carries a signature line.** Both are issued electronically and state
+so, directing anyone who needs to check to the QR code or the verification cell. A
+printed "Authorised Signatory" on a document nobody signed is worse than none at all.
+`tests/test_documents.py` asserts this, along with the absence of the fee amount, and
+that long names and domain titles are shrunk or ellipsised rather than allowed to run
+through the border.
 
 **Downloads regenerate on demand.** `GET /me/offer-letter/download` and
 `GET /me/certificate/download` re-render the PDF if the stored file is missing or is not
@@ -177,11 +243,35 @@ transmitted**. Re-inviting the same address invalidates the previous link.
 Guards: a super admin cannot change their own role or status, and the last active super
 admin cannot be suspended — the platform can never be locked out of itself.
 
+## Email
+
+Ten workflow emails, all through `app/services/email.py`:
+
+| Event | Email |
+| --- | --- |
+| Registration | Verify your email — 24-hour link |
+| Resend verification | A fresh link; the previous one is invalidated |
+| Forgot password | Reset link — 30 minutes, single use |
+| Enrolment | Offer letter ready, with the LinkedIn next step |
+| LinkedIn approved / rejected | Reviewer's remarks, verbatim |
+| Task approved / rejected | Remarks, and whether this was the last task |
+| Payment received | Receipt with the transaction id |
+| Certificate issued | Number, download link and verification URL |
+| Admin invitation | Set-your-own-password link |
+
+**Every message carries a "check your Spam, Junk or Bin folder" note** and a plain-text
+alternative alongside the HTML — some clients and filters reject HTML-only mail.
+
+Delivery runs in a **background task**, so a slow SMTP handshake never delays a student's
+request, and it is wrapped so that **a failure never breaks a workflow**: an enrolment
+still succeeds if email is down. Every attempt is recorded in `email_logs`, and the
+in-app notification is always written regardless.
+
+Set `SMTP_HOST` and the rest of the `SMTP_*` values — see `docs/EXTERNAL_SERVICES.md`.
+With them unset, emails are composed and logged but not sent.
+
 ## Not built yet
 
-- **Email delivery.** `app/services/email.py` records every message in `email_logs` and
-  returns the action link, so invitations work today by copying the link. Set `SMTP_HOST`
-  and delivery switches on with no call-site changes. See `docs/EXTERNAL_SERVICES.md`.
 - **Razorpay browser checkout and webhook.** Order creation and signature verification
   are done; the `checkout.js` step between them is not.
 

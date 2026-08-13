@@ -18,6 +18,10 @@ class UserStatus(StrEnum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
     PENDING = "pending"
+    # Closed by the account holder. Distinct from SUSPENDED, which an admin
+    # applies and can reverse — this one is the student's own decision and is
+    # not undone.
+    DELETED = "deleted"
 
 
 class Difficulty(StrEnum):

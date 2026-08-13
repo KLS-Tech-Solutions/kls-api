@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -35,6 +35,10 @@ from app.schemas.auth import (
     UserOut,
     VerifyEmailRequest,
 )
+from app.services.email import (
+    send_password_reset,
+    send_welcome_verification,
+)
 from app.services.notifications import log_activity, notify
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -48,7 +52,12 @@ def _client_ip(request: Request) -> str | None:
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+def register(
+    payload: RegisterRequest,
+    request: Request,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     existing = db.scalar(select(User).where(User.email == payload.email.lower()))
     if existing is not None:
         raise HTTPException(
@@ -88,11 +97,20 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
     log_activity(db, user.id, "Registered", "auth", str(user.id), _client_ip(request))
     db.commit()
 
-    # TODO Phase 8: email the verification link instead of returning it.
+    outbox = send_welcome_verification(
+        background,
+        user_id=user.id,
+        to=user.email,
+        full_name=user.full_name,
+        token=token.token,
+    )
+
     return {
         "email": user.email,
         "email_verified": False,
-        "verification_token": token.token if not settings.is_production else None,
+        "email_sent": outbox.delivered,
+        # Returned only when email is unconfigured, so the flow is testable.
+        "verification_token": None if outbox.delivered else token.token,
     }
 
 
@@ -105,6 +123,12 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
+        )
+
+    if user.status == UserStatus.DELETED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been closed",
         )
 
     if user.status == UserStatus.SUSPENDED:
@@ -137,7 +161,7 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
     import uuid as _uuid
 
     user = db.get(User, _uuid.UUID(claims["sub"]))
-    if user is None or user.status == UserStatus.SUSPENDED:
+    if user is None or user.status in (UserStatus.SUSPENDED, UserStatus.DELETED):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is no longer valid"
         )
@@ -172,20 +196,66 @@ def verify_email(payload: VerifyEmailRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/forgot-password", status_code=status.HTTP_204_NO_CONTENT)
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
 
     # Always 204 — an attacker must not learn which emails are registered.
-    if user is not None:
-        db.add(
-            EmailToken(
-                user_id=user.id,
-                token=generate_url_token(),
-                purpose="reset_password",
-                expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
-            )
+    if user is not None and user.status != UserStatus.DELETED:
+        token = EmailToken(
+            user_id=user.id,
+            token=generate_url_token(),
+            purpose="reset_password",
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
         )
+        db.add(token)
         db.commit()
+
+        send_password_reset(
+            background, user_id=user.id, to=user.email, token=token.token
+        )
+
+
+@router.post("/resend-verification", status_code=status.HTTP_204_NO_CONTENT)
+def resend_verification(
+    payload: ForgotPasswordRequest,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """
+    Always 204, like forgot-password — this endpoint must not confirm whether
+    an address is registered or already verified.
+    """
+    user = db.scalar(select(User).where(User.email == payload.email.lower()))
+    if user is None or user.email_verified or user.status == UserStatus.DELETED:
+        return
+
+    # Any earlier link stops working the moment a new one is issued.
+    db.query(EmailToken).filter(
+        EmailToken.user_id == user.id,
+        EmailToken.purpose == "verify_email",
+        EmailToken.used_at.is_(None),
+    ).update({EmailToken.used_at: datetime.now(timezone.utc)}, synchronize_session=False)
+
+    token = EmailToken(
+        user_id=user.id,
+        token=generate_url_token(),
+        purpose="verify_email",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+    )
+    db.add(token)
+    db.commit()
+
+    send_welcome_verification(
+        background,
+        user_id=user.id,
+        to=user.email,
+        full_name=user.full_name,
+        token=token.token,
+    )
 
 
 @router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)

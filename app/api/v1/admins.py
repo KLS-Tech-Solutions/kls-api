@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -54,6 +54,7 @@ def list_admins(
 )
 def invite_admin(
     payload: AdminInviteRequest,
+    background: BackgroundTasks,
     inviter: User = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):
@@ -113,8 +114,12 @@ def invite_admin(
     db.add(token)
     db.flush()
 
+    log_activity(db, inviter.id, f"Invited {admin.email}", "admin", str(admin.id))
+    db.commit()
+    db.refresh(admin)
+
     outbox = send_admin_invite(
-        db,
+        background,
         user_id=admin.id,
         to=admin.email,
         full_name=admin.full_name,
@@ -123,14 +128,11 @@ def invite_admin(
         role=admin.role.value,
     )
 
-    log_activity(db, inviter.id, f"Invited {admin.email}", "admin", str(admin.id))
-    db.commit()
-    db.refresh(admin)
-
     return AdminInviteResponse(
         admin=AdminOut.model_validate(admin),
-        # Hidden once email delivery works — the link should arrive by email.
-        invite_url=None if outbox.delivered else outbox.action_url,
+        # Always returned. Even with email working, a new sending domain often
+        # lands in spam — the inviter needs a link they can pass on directly.
+        invite_url=outbox.action_url,
         email_delivered=outbox.delivered,
     )
 

@@ -9,9 +9,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_student
+from app.core.security import generate_url_token, hash_password, verify_password
 from app.models import (
     Certificate,
     CertificateStatus,
+    EmailToken,
     Enrollment,
     EnrollmentStatus,
     InternshipBatch,
@@ -30,7 +32,9 @@ from app.models import (
     TaskScreenshot,
     TaskSubmission,
     User,
+    UserStatus,
 )
+from app.schemas.auth import DeleteAccountRequest
 from app.schemas.internship import (
     CertificateOut,
     EnrollRequest,
@@ -50,7 +54,12 @@ from app.schemas.internship import (
 from app.services.aggregate import build_journey, certificate_out
 from app.services.documents import generate_certificate, generate_offer_letter
 from app.services.storage import read_bytes
-from app.services.journey import compute_stage, get_active_enrollment, has_reached
+from app.services.journey import (
+    certificate_for,
+    compute_stage,
+    get_active_enrollment,
+    has_reached,
+)
 from app.services.notifications import log_activity, notify
 from app.services.numbering import next_certificate_number, next_offer_letter_number
 from app.services.storage import save_screenshot
@@ -132,38 +141,16 @@ def mark_notifications_read(
     db.commit()
 
 
-@router.get("/offer-letter/download")
-def download_offer_letter(
-    student: User = Depends(get_current_student), db: Session = Depends(get_db)
-):
+def _offer_letter_response(db: Session, student: User, offer_letter: OfferLetter):
     """
-    Streams the offer letter PDF.
+    Streams an offer letter PDF, regenerating it if the stored file is missing.
 
-    Regenerates it if the stored file is missing — which covers records created
-    before PDF rendering worked, and any file lost from storage. The database
-    record is the source of truth; the file is a rendering of it.
+    The database record is the source of truth and the file is a rendering of
+    it, so a lost file is never a lost document.
     """
-    enrollment = get_active_enrollment(db, student.id)
-    offer_letter = (
-        db.scalar(
-            select(OfferLetter).where(
-                OfferLetter.student_id == student.id,
-                OfferLetter.batch_id == enrollment.batch_id,
-            )
-        )
-        if enrollment
-        else None
-    )
-
-    if offer_letter is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="You do not have an offer letter yet",
-        )
-
     pdf = read_bytes(offer_letter.pdf_url) if offer_letter.pdf_url else None
 
-    if pdf is None or not offer_letter.pdf_url or not offer_letter.pdf_url.endswith(".pdf"):
+    if pdf is None or not (offer_letter.pdf_url or "").endswith(".pdf"):
         batch = db.get(InternshipBatch, offer_letter.batch_id)
         domain = db.get(InternshipDomain, batch.domain_id) if batch else None
         task_count = db.scalar(
@@ -182,6 +169,7 @@ def download_offer_letter(
             batch_name=batch.batch_name if batch else "",
             task_count=task_count,
             issued_on=offer_letter.generated_at,
+            starts_on=batch.start_date if batch else None,
         )
         db.commit()
         pdf = read_bytes(offer_letter.pdf_url)
@@ -200,30 +188,15 @@ def download_offer_letter(
     )
 
 
-@router.get("/certificate/download")
-def download_certificate(
-    student: User = Depends(get_current_student), db: Session = Depends(get_db)
-):
-    """Streams the certificate PDF, regenerating it if the file is missing."""
-    certificate = db.scalar(
-        select(Certificate).where(
-            Certificate.student_id == student.id,
-            Certificate.status == CertificateStatus.ISSUED,
-        )
-    )
-    if certificate is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Your certificate has not been issued yet",
-        )
-
+def _certificate_response(db: Session, student: User, certificate: Certificate):
+    """Streams a certificate PDF, regenerating it if the file is missing."""
     pdf = read_bytes(certificate.certificate_url) if certificate.certificate_url else None
 
     if pdf is None or not (certificate.certificate_url or "").endswith(".pdf"):
         data = certificate_out(db, certificate)
         certificate.certificate_url, certificate.qr_code_url = generate_certificate(
             certificate_number=certificate.certificate_number,
-            student_name=data.student_name or student.full_name,
+            student_name=data.student_name or certificate.student_name or student.full_name,
             domain_title=data.domain_title,
             duration=data.duration,
             issued_on=certificate.issued_at,
@@ -245,14 +218,191 @@ def download_certificate(
     )
 
 
+def _own_enrollment(db: Session, student: User, enrollment_id: uuid.UUID) -> Enrollment:
+    """
+    Resolves an enrolment id, refusing anything that is not the caller's.
+
+    Returning 404 rather than 403 for someone else's enrolment: a student has
+    no business learning whether a given id exists.
+    """
+    enrollment = db.get(Enrollment, enrollment_id)
+    if enrollment is None or enrollment.student_id != student.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Internship not found"
+        )
+    return enrollment
+
+
+@router.get("/offer-letter/download")
+def download_offer_letter(
+    student: User = Depends(get_current_student), db: Session = Depends(get_db)
+):
+    """The offer letter for the internship currently in progress."""
+    enrollment = get_active_enrollment(db, student.id)
+    offer_letter = (
+        db.scalar(
+            select(OfferLetter).where(
+                OfferLetter.student_id == student.id,
+                OfferLetter.batch_id == enrollment.batch_id,
+            )
+        )
+        if enrollment
+        else None
+    )
+
+    if offer_letter is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="You do not have an offer letter yet",
+        )
+
+    return _offer_letter_response(db, student, offer_letter)
+
+
+@router.get("/certificate/download")
+def download_certificate(
+    student: User = Depends(get_current_student), db: Session = Depends(get_db)
+):
+    """The certificate for the internship currently in progress."""
+    enrollment = get_active_enrollment(db, student.id)
+    certificate = certificate_for(db, enrollment) if enrollment else None
+    if certificate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Your certificate has not been issued yet",
+        )
+
+    return _certificate_response(db, student, certificate)
+
+
+# --------------------------------------------------------------------------
+# Documents from any internship the student has taken
+#
+# A student who completes one internship and starts another keeps access to
+# everything they earned. These routes are addressed by enrolment id so the
+# "My internships" screen can offer a download on every card, not just the
+# current one.
+# --------------------------------------------------------------------------
+
+
+@router.get("/internships/{enrollment_id}/offer-letter/download")
+def download_offer_letter_for(
+    enrollment_id: uuid.UUID,
+    student: User = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    enrollment = _own_enrollment(db, student, enrollment_id)
+    offer_letter = db.scalar(
+        select(OfferLetter).where(
+            OfferLetter.student_id == student.id,
+            OfferLetter.batch_id == enrollment.batch_id,
+        )
+    )
+    if offer_letter is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="There is no offer letter for that internship",
+        )
+
+    return _offer_letter_response(db, student, offer_letter)
+
+
+@router.get("/internships/{enrollment_id}/certificate/download")
+def download_certificate_for(
+    enrollment_id: uuid.UUID,
+    student: User = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    enrollment = _own_enrollment(db, student, enrollment_id)
+    certificate = certificate_for(db, enrollment)
+    if certificate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No certificate was issued for that internship",
+        )
+
+    return _certificate_response(db, student, certificate)
+
+
 @router.get("/certificate", response_model=CertificateOut | None)
 def my_certificate(
     student: User = Depends(get_current_student), db: Session = Depends(get_db)
 ):
-    certificate = db.scalar(
-        select(Certificate).where(
-            Certificate.student_id == student.id,
-            Certificate.status == CertificateStatus.ISSUED,
-        )
-    )
+    """
+    The certificate for the internship currently in progress, if it has one.
+
+    Scoped to the current enrolment like the rest of the journey — a student on
+    their second internship must not see the first one's certificate here. Past
+    certificates come back in `journey.history`.
+    """
+    enrollment = get_active_enrollment(db, student.id)
+    certificate = certificate_for(db, enrollment) if enrollment else None
     return certificate_out(db, certificate) if certificate else None
+
+
+# --------------------------------------------------------------------------
+# Closing an account
+# --------------------------------------------------------------------------
+
+
+@router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
+def delete_account(
+    payload: DeleteAccountRequest,
+    student: User = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Close the account and scrub the personal data behind it.
+
+    **Soft, not a row delete.** Issued certificates must stay verifiable — an
+    employer's link cannot start 404ing because the student later closed their
+    account, and the credential was paid for. The user row therefore survives
+    as an anonymous shell so those foreign keys still resolve, and the
+    certificate carries its own copy of the recipient's name.
+
+    What is removed: name, phone, the whole student profile (college, degree,
+    branch, year, LinkedIn, GitHub) and the password. The email address is
+    replaced with an unusable placeholder, which also releases the real
+    address should they ever want to sign up again.
+
+    The current password is required. This is irreversible, and an unattended
+    logged-in session should not be enough to trigger it.
+    """
+    if not verify_password(payload.password, student.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="That password is not correct",
+        )
+
+    certificates = list(
+        db.scalars(select(Certificate).where(Certificate.student_id == student.id))
+    )
+    for certificate in certificates:
+        # Backfill for anything issued before the snapshot column existed,
+        # while the real name is still readable.
+        if not certificate.student_name:
+            certificate.student_name = student.full_name
+
+    log_activity(db, student.id, "Closed their account", "account", str(student.id))
+
+    profile = db.scalar(
+        select(StudentProfile).where(StudentProfile.user_id == student.id)
+    )
+    if profile is not None:
+        db.delete(profile)
+
+    # Any outstanding email links stop working immediately.
+    db.query(EmailToken).filter(
+        EmailToken.user_id == student.id, EmailToken.used_at.is_(None)
+    ).update({EmailToken.used_at: datetime.now(timezone.utc)}, synchronize_session=False)
+
+    student.full_name = "Deleted user"
+    student.phone = ""
+    # Unique, unusable, and clearly not a real address.
+    student.email = f"deleted+{student.id}@account.invalid"
+    student.password_hash = hash_password(generate_url_token())
+    student.email_verified = False
+    student.status = UserStatus.DELETED
+    student.deleted_at = datetime.now(timezone.utc)
+
+    db.commit()

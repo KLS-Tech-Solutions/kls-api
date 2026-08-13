@@ -8,6 +8,8 @@ PDF on every platform.
 
 import io
 
+from sqlalchemy import select
+
 from pypdf import PdfReader
 
 from app.services.documents import (
@@ -226,3 +228,175 @@ def test_offer_letter_regenerates_when_the_file_is_missing(client, db_session, t
     response = client.get("/api/v1/me/offer-letter/download", headers=auth_headers(token))
     assert response.status_code == 200
     assert response.content.startswith(b"%PDF")
+
+
+# --------------------------------------------------------------------------
+# The redesigned documents — the invariants that must not regress
+# --------------------------------------------------------------------------
+
+def _render_pair(monkeypatch, **overrides):
+    """Renders both documents and returns their extracted text."""
+    from datetime import date
+
+    from app.services import documents
+
+    captured: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        documents, "upload_bytes",
+        lambda data, key, content_type: captured.setdefault(key, data) and f"/media/{key}",
+    )
+
+    name = overrides.get("student_name", "Ananya Rao")
+    domain = overrides.get("domain_title", "Backend Development")
+
+    documents.generate_offer_letter(
+        offer_number="KLS-ACAD-2026-00500",
+        student_name=name,
+        domain_title=domain,
+        duration="8 weeks",
+        batch_name="Batch 01",
+        task_count=4,
+        starts_on=overrides.get("starts_on", date(2026, 8, 18)),
+    )
+    documents.generate_certificate(
+        certificate_number="KLS-CERT-2026-00500",
+        student_name=name,
+        domain_title=domain,
+        duration="8 weeks",
+    )
+
+    offer = captured["offer-letters/KLS-ACAD-2026-00500.pdf"]
+    certificate = captured["certificates/KLS-CERT-2026-00500.pdf"]
+    return pdf_text(offer), pdf_text(certificate)
+
+
+def test_neither_document_carries_a_signature_line(monkeypatch):
+    """
+    Both are issued electronically. A printed 'Authorised Signatory' on an
+    unsigned document is worse than none at all, so it must stay gone.
+    """
+    offer, certificate = _render_pair(monkeypatch)
+    for text in (offer, certificate):
+        assert "Signatory" not in text
+        assert "Signature" not in text.replace("signature is required", "")
+
+
+def test_both_documents_explain_that_they_are_electronic(monkeypatch):
+    offer, certificate = _render_pair(monkeypatch)
+    for text in (offer, certificate):
+        assert "electronically generated document" in text
+        assert "No physical signature is required" in text
+        assert "Verification Cell" in text
+        assert "www.klstechsolutions.in" in text
+
+
+def test_the_fee_amount_appears_on_neither_document(monkeypatch):
+    """
+    The amount belongs in the terms of service, the refund policy and at
+    checkout. Nowhere else, so it can only ever be changed in one place.
+    """
+    offer, certificate = _render_pair(monkeypatch)
+    for text in (offer, certificate):
+        for form in ("Rs. 50", "Rs 50", "₹50", "₹ 50", "50 rupees", "INR 50"):
+            assert form not in text
+        # No currency marker at all, in any amount.
+        assert "₹" not in text and "Rs." not in text
+
+
+def test_the_offer_letter_summarises_the_programme(monkeypatch):
+    offer, _ = _render_pair(monkeypatch)
+    assert "PROGRAMME AT A GLANCE" in offer
+    for label in ("DOMAIN", "BATCH", "DURATION", "TECHNICAL TASKS", "MODE",
+                  "COMMENCES"):
+        assert label in offer
+    assert "18 Aug 2026" in offer
+
+
+def test_a_batch_with_no_start_date_still_renders(monkeypatch):
+    """`starts_on` is optional — an em dash, never a crash or a 'None'."""
+    offer, _ = _render_pair(monkeypatch, starts_on=None)
+    assert "COMMENCES" in offer
+    assert "None" not in offer
+
+
+def test_long_names_and_domains_do_not_overflow(monkeypatch):
+    """
+    The recipient name steps down a size and table values are truncated, so a
+    45-character name cannot push text through the certificate border.
+    """
+    name = "Venkatanarasimharajuvaripeta Lakshminarayanan"
+    domain = "Artificial Intelligence and Machine Learning Engineering"
+    offer, certificate = _render_pair(
+        monkeypatch, student_name=name, domain_title=domain
+    )
+    assert name in certificate
+    assert name in offer
+    # The narrow cells ellipsise rather than run into their neighbour.
+    assert "…" in offer
+    assert "…" in certificate
+
+
+def test_neither_document_mentions_sudhamanagar_or_pvt_ltd(monkeypatch):
+    offer, certificate = _render_pair(monkeypatch)
+    for text in (offer, certificate):
+        assert "Sudhamanagar" not in text
+        assert "Pvt" not in text
+
+
+def test_history_downloads_are_scoped_to_the_caller(client, db_session):
+    """
+    The per-internship download routes take an enrolment id from the URL.
+    Someone else's id must not resolve — and must 404, not 403, so a student
+    cannot probe which ids exist.
+    """
+    from datetime import date, timedelta
+
+    from app.models import Difficulty, Enrollment, InternshipBatch, InternshipDomain
+    from tests.conftest import auth_headers
+
+    domain = InternshipDomain(
+        slug="d", title="Backend", description="Build services.",
+        duration="4 weeks", difficulty=Difficulty.INTERMEDIATE,
+    )
+    db_session.add(domain)
+    db_session.flush()
+    batch = InternshipBatch(
+        domain_id=domain.id, batch_name="Batch 01",
+        start_date=date.today(), end_date=date.today() + timedelta(weeks=4),
+    )
+    db_session.add(batch)
+    db_session.commit()
+
+    def register(email: str) -> str:
+        client.post("/api/v1/auth/register", json={
+            "full_name": "Student", "email": email,
+            "phone": "9845012345", "password": "kls12345",
+        })
+        return client.post(
+            "/api/v1/auth/login", json={"email": email, "password": "kls12345"}
+        ).json()["access_token"]
+
+    owner = register("owner@example.com")
+    intruder = register("intruder@example.com")
+
+    client.post(
+        "/api/v1/enrollments",
+        headers=auth_headers(owner),
+        json={"domain_id": str(domain.id), "batch_id": str(batch.id)},
+    )
+    enrollment_id = str(
+        db_session.scalar(select(Enrollment.id).where(Enrollment.batch_id == batch.id))
+    )
+
+    mine = client.get(
+        f"/api/v1/me/internships/{enrollment_id}/offer-letter/download",
+        headers=auth_headers(owner),
+    )
+    assert mine.status_code == 200
+    assert mine.content.startswith(b"%PDF")
+
+    theirs = client.get(
+        f"/api/v1/me/internships/{enrollment_id}/offer-letter/download",
+        headers=auth_headers(intruder),
+    )
+    assert theirs.status_code == 404, "one student must not read another's documents"

@@ -28,6 +28,9 @@ class User(Base, UUIDMixin, TimestampMixin):
     )
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when the holder closes the account. The row survives so issued
+    # certificates keep a valid foreign key and stay publicly verifiable.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     student_profile: Mapped["StudentProfile | None"] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"

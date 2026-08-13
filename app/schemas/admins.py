@@ -26,10 +26,8 @@ class AdminInviteRequest(BaseModel):
 
 class AdminInviteResponse(BaseModel):
     admin: AdminOut
-    """
-    The invite link. Returned so a super admin can send it by hand while email
-    delivery is unconfigured — it is omitted once SMTP is live.
-    """
+    # Always present. Even with email working a new sending domain often lands
+    # in spam, so the inviter needs a link they can pass on directly.
     invite_url: str | None = None
     email_delivered: bool = False
 

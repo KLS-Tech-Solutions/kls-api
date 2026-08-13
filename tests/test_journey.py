@@ -191,7 +191,7 @@ def test_full_journey(client, db_session, catalogue, student_token, admin_token,
     assert response.status_code == 200
     assert stage_of(client, student_token) == "linkedin_approved"
 
-    # 6 — tasks are sequential ----------------------------------------------
+    # 6 — tasks are sequential: nothing can be skipped -----------------------
     out_of_order = client.post(
         "/api/v1/task-submissions",
         headers=student_headers,

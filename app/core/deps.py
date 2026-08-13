@@ -45,6 +45,12 @@ def get_current_user(
     if user is None:
         raise CREDENTIALS_EXCEPTION
 
+    if user.status == UserStatus.DELETED:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This account has been closed",
+        )
+
     if user.status == UserStatus.SUSPENDED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

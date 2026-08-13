@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import admin, admins, auth, enrollment, public, student
+from app.api.v1 import admin, admins, auth, enrollment, public, settings, student
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -9,3 +9,4 @@ api_router.include_router(student.router)
 api_router.include_router(enrollment.router)
 api_router.include_router(admin.router)
 api_router.include_router(admins.router)
+api_router.include_router(settings.router)

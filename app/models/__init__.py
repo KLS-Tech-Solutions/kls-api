@@ -22,6 +22,7 @@ from app.models.enums import (
     UserStatus,
 )
 from app.models.internship import Enrollment, InternshipBatch, InternshipDomain, Task
+from app.models.settings import PlatformSetting
 from app.models.submission import (
     AdminReview,
     LinkedInSubmission,
@@ -56,6 +57,7 @@ __all__ = [
     "OfferLetter",
     "Payment",
     "PaymentStatus",
+    "PlatformSetting",
     "PublishStatus",
     "ReviewStatus",
     "StudentProfile",

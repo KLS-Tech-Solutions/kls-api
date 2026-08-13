@@ -49,6 +49,10 @@ class Certificate(Base, UUIDMixin, TimestampMixin):
     certificate_number: Mapped[str] = mapped_column(
         String(50), unique=True, index=True, nullable=False
     )
+    # Snapshot of the recipient's name at issue. The public verification page
+    # reads this rather than the user row, so closing an account never
+    # invalidates a credential that was earned and paid for.
+    student_name: Mapped[str | None] = mapped_column(String(100))
     certificate_url: Mapped[str | None] = mapped_column(String(500))
     qr_code_url: Mapped[str | None] = mapped_column(String(500))
     status: Mapped[CertificateStatus] = mapped_column(

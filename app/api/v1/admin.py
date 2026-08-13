@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.core.deps import get_current_admin, get_current_super_admin
 from app.models import (
     ActivityLog,
+    JourneyStage,
     AdminReview,
     Certificate,
     CertificateStatus,
@@ -49,6 +50,7 @@ from app.schemas.internship import (
 from app.schemas.auth import UserOut
 from app.services.aggregate import batch_out, build_journey, domain_out, submission_out
 from app.services.journey import compute_stage
+from app.services.email import send_linkedin_reviewed, send_task_reviewed
 from app.services.notifications import log_activity, notify
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -75,6 +77,7 @@ def list_linkedin_submissions(
 def review_linkedin_submission(
     submission_id: uuid.UUID,
     payload: ReviewRequest,
+    background: BackgroundTasks,
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
@@ -116,6 +119,17 @@ def review_linkedin_submission(
     )
     db.commit()
     db.refresh(submission)
+
+    student = db.get(User, submission.student_id)
+    if student is not None:
+        send_linkedin_reviewed(
+            background,
+            user_id=student.id,
+            to=student.email,
+            approved=payload.status == ReviewStatus.APPROVED,
+            remarks=payload.remarks,
+        )
+
     return submission
 
 
@@ -162,6 +176,7 @@ def get_task_submission(
 def review_task_submission(
     submission_id: uuid.UUID,
     payload: ReviewRequest,
+    background: BackgroundTasks,
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
@@ -213,6 +228,26 @@ def review_task_submission(
     )
     db.commit()
     db.refresh(submission)
+
+    student = db.get(User, submission.student_id)
+    if student is not None:
+        approved = payload.status == ReviewStatus.APPROVED
+        # Tell them explicitly when this was the last one — that is the moment
+        # the certificate becomes available and it should not be a surprise.
+        finished = approved and compute_stage(db, student.id) in (
+            JourneyStage.ALL_TASKS_APPROVED,
+            JourneyStage.PAYMENT_PENDING,
+        )
+        send_task_reviewed(
+            background,
+            user_id=student.id,
+            to=student.email,
+            approved=approved,
+            task_title=task.title if task else "Your submission",
+            remarks=payload.remarks,
+            all_approved=finished,
+        )
+
     return submission_out(submission)
 
 

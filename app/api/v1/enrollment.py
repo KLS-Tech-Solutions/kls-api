@@ -1,7 +1,16 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -36,11 +45,23 @@ from app.schemas.internship import (
     PaymentVerifyRequest,
     TaskSubmissionOut,
 )
-from app.services.aggregate import submission_out
-from app.services.journey import compute_stage, get_active_enrollment, has_reached
+from app.services.aggregate import certificate_out, submission_out
+from app.services.journey import (
+    certificate_for,
+    compute_stage,
+    get_active_enrollment,
+    has_reached,
+    linkedin_for,
+)
 from app.services.notifications import log_activity, notify
 from app.services.documents import generate_certificate, generate_offer_letter
+from app.services.email import (
+    send_certificate_issued,
+    send_offer_letter_ready,
+    send_payment_received,
+)
 from app.services.numbering import next_certificate_number, next_offer_letter_number
+from app.services.settings_store import certificate_fee_paise
 from app.services.storage import StorageError, save_screenshot
 
 router = APIRouter(tags=["student"])
@@ -48,18 +69,42 @@ router = APIRouter(tags=["student"])
 @router.post("/enrollments", status_code=status.HTTP_201_CREATED)
 def enroll(
     payload: EnrollRequest,
+    background: BackgroundTasks,
     student: User = Depends(get_current_student),
     db: Session = Depends(get_db),
 ):
-    if get_active_enrollment(db, student.id) is not None:
+    # A student may take a second internship, but only once the current one is
+    # finished — certificated, which means paid for too. Anything earlier and
+    # they would abandon a half-done journey to start another.
+    current = get_active_enrollment(db, student.id)
+    if current is not None and certificate_for(db, current) is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="You already hold an active internship",
+            detail=(
+                "Finish your current internship first — your certificate is "
+                "issued once every task is approved and the fee is paid"
+            ),
         )
 
     batch = db.get(InternshipBatch, payload.batch_id)
     if batch is None or batch.domain_id != payload.domain_id:
         raise HTTPException(status_code=404, detail="Internship batch not found")
+
+    # Re-enrolling in a batch they have already taken would make the previous
+    # submissions count towards the new internship, since submissions are
+    # keyed by task.
+    already_taken = db.scalar(
+        select(Enrollment.id).where(
+            Enrollment.student_id == student.id,
+            Enrollment.batch_id == batch.id,
+            Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.COMPLETED]),
+        )
+    )
+    if already_taken is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You have already taken this internship — choose a different one",
+        )
 
     enrollment = Enrollment(
         student_id=student.id, batch_id=batch.id, status=EnrollmentStatus.ACTIVE
@@ -88,6 +133,7 @@ def enroll(
             duration=domain.duration if domain else "",
             batch_name=batch.batch_name,
             task_count=task_count,
+            starts_on=batch.start_date,
         )
     except Exception:  # noqa: BLE001 — enrolment must not fail on a render error
         offer_letter.pdf_url = None
@@ -101,6 +147,15 @@ def enroll(
     )
     log_activity(db, student.id, "Enrolled", "enrollment", str(enrollment.id))
     db.commit()
+
+    send_offer_letter_ready(
+        background,
+        user_id=student.id,
+        to=student.email,
+        full_name=student.full_name,
+        offer_number=offer_letter.offer_letter_number,
+        domain_title=domain.title if domain else "your internship",
+    )
 
     return {"enrollment_id": str(enrollment.id)}
 
@@ -124,11 +179,9 @@ def submit_linkedin(
     if offer_letter is None:
         raise HTTPException(status_code=409, detail="Your offer letter is not ready yet")
 
-    existing = db.scalar(
-        select(LinkedInSubmission)
-        .where(LinkedInSubmission.student_id == student.id)
-        .order_by(LinkedInSubmission.submitted_at.desc())
-    )
+    # Scoped to this batch — an approved post from a previous internship must
+    # not block the student from posting about this one.
+    existing = linkedin_for(db, student.id, enrollment.batch_id)
     if existing is not None and existing.status == ReviewStatus.APPROVED:
         raise HTTPException(status_code=409, detail="Your LinkedIn post is already verified")
 
@@ -232,8 +285,13 @@ async def submit_task(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=issues
         )
 
-    # Tasks are sequential. Disabled tasks are skipped, so parking one does
-    # not strand every student behind it.
+    # Tasks are sequential, but the gate is **submission, not approval**. A
+    # student who has finished task 1 can start task 2 immediately rather than
+    # sitting idle waiting for a reviewer — review latency should never be the
+    # thing that slows an internship down.
+    #
+    # Approval still gates the certificate: `all_tasks_approved` requires every
+    # submission to be approved, so nobody finishes on unreviewed work.
     previous = db.scalar(
         select(Task)
         .where(
@@ -245,17 +303,24 @@ async def submit_task(
         .order_by(Task.order_number.desc())
     )
     if previous is not None:
-        previous_ok = db.scalar(
+        previous_submitted = db.scalar(
             select(TaskSubmission.id).where(
                 TaskSubmission.student_id == student.id,
                 TaskSubmission.task_id == previous.id,
-                TaskSubmission.status == SubmissionStatus.APPROVED,
+                TaskSubmission.status.in_(
+                    [
+                        SubmissionStatus.SUBMITTED,
+                        SubmissionStatus.UNDER_REVIEW,
+                        SubmissionStatus.APPROVED,
+                        SubmissionStatus.REJECTED,
+                    ]
+                ),
             )
         )
-        if previous_ok is None:
+        if previous_submitted is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Finish and get the previous task approved first",
+                detail="Submit the previous task before starting this one",
             )
 
     existing = db.scalar(
@@ -325,7 +390,9 @@ def create_payment_order(
         raise HTTPException(status_code=409, detail="Your certificate fee is already paid")
 
     enrollment = get_active_enrollment(db, student.id)
-    amount = settings.CERTIFICATE_FEE_PAISE
+    # Read at order time and copied onto the Payment row, so a fee change
+    # mid-checkout never alters what an in-flight order is charged.
+    amount = certificate_fee_paise(db)
 
     if settings.payments_configured:
         import razorpay
@@ -362,6 +429,7 @@ def create_payment_order(
 @router.post("/payments/verify", response_model=PaymentOut)
 def verify_payment(
     payload: PaymentVerifyRequest,
+    background: BackgroundTasks,
     student: User = Depends(get_current_student),
     db: Session = Depends(get_db),
 ):
@@ -412,26 +480,52 @@ def verify_payment(
     log_activity(db, student.id, "Paid certificate fee", "payment", str(payment.id))
     db.flush()
 
-    _issue_certificate(db, student, payment)
+    certificate = _issue_certificate(db, student, payment)
 
     db.commit()
     db.refresh(payment)
+
+    send_payment_received(
+        background,
+        user_id=student.id,
+        to=student.email,
+        transaction_id=payment.transaction_id or "",
+    )
+
+    if certificate is not None:
+        db.refresh(certificate)
+        data = certificate_out(db, certificate)
+        send_certificate_issued(
+            background,
+            user_id=student.id,
+            to=student.email,
+            full_name=student.full_name,
+            certificate_number=certificate.certificate_number,
+            domain_title=data.domain_title,
+        )
+
     return payment
 
 
-def _issue_certificate(db: Session, student: User, payment: Payment) -> None:
+def _issue_certificate(db: Session, student: User, payment: Payment) -> Certificate | None:
     """
     Runs inside the payment transaction. A student who has paid must end up
     with a certificate record even if PDF rendering fails — the file can be
     regenerated, a missing record cannot be reconstructed.
     """
+    enrollment = get_active_enrollment(db, student.id)
+
+    # Scoped to this enrolment: a student on their second internship already
+    # holds a certificate for the first, and must still receive a new one.
     existing = db.scalar(
-        select(Certificate).where(Certificate.student_id == student.id)
+        select(Certificate).where(
+            Certificate.student_id == student.id,
+            Certificate.enrollment_id == (enrollment.id if enrollment else None),
+        )
     )
     if existing is not None:
-        return
+        return existing
 
-    enrollment = get_active_enrollment(db, student.id)
     batch = db.get(InternshipBatch, enrollment.batch_id) if enrollment else None
     domain = db.get(InternshipDomain, batch.domain_id) if batch else None
 
@@ -440,6 +534,7 @@ def _issue_certificate(db: Session, student: User, payment: Payment) -> None:
         enrollment_id=enrollment.id if enrollment else None,
         payment_id=payment.id,
         certificate_number=next_certificate_number(db),
+        student_name=student.full_name,
     )
     db.add(certificate)
 
@@ -466,3 +561,5 @@ def _issue_certificate(db: Session, student: User, payment: Payment) -> None:
         f"Certificate {certificate.certificate_number} is ready to download.",
         NotificationType.CERTIFICATE,
     )
+
+    return certificate

@@ -78,3 +78,12 @@ class ResetPasswordRequest(BaseModel):
 
 class VerifyEmailRequest(BaseModel):
     token: str
+
+
+class DeleteAccountRequest(BaseModel):
+    """
+    Closing an account is irreversible, so it is re-authenticated rather than
+    trusting whatever session happens to be open on the device.
+    """
+
+    password: str = Field(min_length=1)

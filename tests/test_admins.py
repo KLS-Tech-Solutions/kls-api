@@ -46,7 +46,8 @@ def test_invite_creates_pending_admin_with_link(client, db_session):
     body = response.json()
     assert body["admin"]["status"] == "pending"
     assert body["admin"]["role"] == "admin"
-    # SMTP is unconfigured in tests, so the link comes back for manual sending.
+    # SMTP is disabled in tests, so nothing is delivered — but the link is
+    # always returned so an inviter can pass it on directly.
     assert body["email_delivered"] is False
     assert "/accept-invite?token=" in body["invite_url"]
 

@@ -6,6 +6,14 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
 
+# Hard overrides, not defaults: the developer's .env is loaded by
+# pydantic-settings, and a test suite that reaches real SMTP or real object
+# storage is a test suite that fails on someone else's laptop.
+os.environ["SMTP_HOST"] = ""
+os.environ["R2_ACCESS_KEY_ID"] = ""
+os.environ["R2_SECRET_ACCESS_KEY"] = ""
+os.environ["ENVIRONMENT"] = "test"
+
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402

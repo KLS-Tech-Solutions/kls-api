@@ -5,17 +5,20 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import settings
 from app.models import (
     Certificate,
     CertificateStatus,
     InternshipBatch,
     InternshipDomain,
+    JourneyStage,
     LinkedInSubmission,
     Notification,
     OfferLetter,
     Payment,
     PaymentStatus,
     StudentProfile,
+    SubmissionStatus,
     Task,
     TaskSubmission,
     User,
@@ -25,6 +28,7 @@ from app.schemas.internship import (
     CertificateOut,
     DomainOut,
     EnrollmentOut,
+    InternshipHistoryOut,
     JourneyOut,
     LinkedInSubmissionOut,
     NotificationOut,
@@ -35,7 +39,14 @@ from app.schemas.internship import (
     TaskSubmissionOut,
 )
 from app.schemas.auth import UserOut
-from app.services.journey import compute_stage, get_active_enrollment
+from app.services.settings_store import certificate_fee_paise
+from app.services.journey import (
+    certificate_for,
+    compute_stage,
+    get_active_enrollment,
+    linkedin_for,
+    list_enrollments,
+)
 
 
 def domain_out(db: Session, domain: InternshipDomain) -> DomainOut:
@@ -78,9 +89,15 @@ def certificate_out(db: Session, certificate: Certificate) -> CertificateOut:
     """Denormalised for the public verification page and the student's copy."""
     data = CertificateOut.model_validate(certificate)
 
-    student = db.get(User, certificate.student_id)
-    if student is not None:
-        data.student_name = student.full_name
+    # Prefer the snapshot taken at issue. Falling back to the live user row
+    # keeps certificates issued before that column existed working, but a
+    # closed account would render as "Deleted user" through that path.
+    if certificate.student_name:
+        data.student_name = certificate.student_name
+    else:
+        student = db.get(User, certificate.student_id)
+        if student is not None:
+            data.student_name = student.full_name
 
     if certificate.enrollment_id is not None:
         from app.models import Enrollment
@@ -96,6 +113,83 @@ def certificate_out(db: Session, certificate: Certificate) -> CertificateOut:
                     data.duration = domain.duration
 
     return data
+
+
+def build_history(db: Session, student_id: uuid.UUID) -> list[InternshipHistoryOut]:
+    """
+    One card per internship the student has taken, newest first.
+
+    The offer letter and certificate URLs are included on every entry, not
+    just the current one — a student who paid for a credential keeps access to
+    it after moving on to the next internship.
+    """
+    from app.models import Enrollment  # noqa: F401 — used via list_enrollments
+
+    enrollments = list_enrollments(db, student_id)
+    current_id = enrollments[0].id if enrollments else None
+    history: list[InternshipHistoryOut] = []
+
+    for enrollment in enrollments:
+        batch = db.get(InternshipBatch, enrollment.batch_id)
+        domain = db.get(InternshipDomain, batch.domain_id) if batch else None
+
+        task_ids = list(
+            db.scalars(
+                select(Task.id).where(
+                    Task.batch_id == enrollment.batch_id,
+                    Task.order_number > 0,
+                    Task.is_active.is_(True),
+                )
+            )
+        )
+        approved = (
+            db.scalar(
+                select(func.count(TaskSubmission.id)).where(
+                    TaskSubmission.student_id == student_id,
+                    TaskSubmission.task_id.in_(task_ids),
+                    TaskSubmission.status == SubmissionStatus.APPROVED,
+                )
+            )
+            or 0
+            if task_ids
+            else 0
+        )
+
+        offer_letter = db.scalar(
+            select(OfferLetter).where(
+                OfferLetter.student_id == student_id,
+                OfferLetter.batch_id == enrollment.batch_id,
+            )
+        )
+        certificate = certificate_for(db, enrollment)
+
+        history.append(
+            InternshipHistoryOut(
+                enrollment_id=enrollment.id,
+                batch_id=enrollment.batch_id,
+                batch_name=batch.batch_name if batch else "Internship",
+                domain_title=domain.title if domain else "KLS Academy Internship",
+                domain_slug=domain.slug if domain else None,
+                duration=domain.duration if domain else None,
+                status=enrollment.status,
+                enrolled_at=enrollment.enrolled_at,
+                completed_at=enrollment.completed_at,
+                is_current=enrollment.id == current_id,
+                tasks_total=len(task_ids),
+                tasks_approved=approved,
+                offer_letter_number=(
+                    offer_letter.offer_letter_number if offer_letter else None
+                ),
+                offer_letter_url=offer_letter.pdf_url if offer_letter else None,
+                certificate_number=(
+                    certificate.certificate_number if certificate else None
+                ),
+                certificate_url=certificate.certificate_url if certificate else None,
+                certificate_issued_at=certificate.issued_at if certificate else None,
+            )
+        )
+
+    return history
 
 
 def build_journey(db: Session, student: User) -> JourneyOut:
@@ -120,10 +214,10 @@ def build_journey(db: Session, student: User) -> JourneyOut:
         else None
     )
 
-    linkedin = db.scalar(
-        select(LinkedInSubmission)
-        .where(LinkedInSubmission.student_id == student.id)
-        .order_by(LinkedInSubmission.submitted_at.desc())
+    # Scoped to the current batch, like everything else here — a LinkedIn post
+    # approved for a previous internship is not this internship's.
+    linkedin = (
+        linkedin_for(db, student.id, enrollment.batch_id) if enrollment else None
     )
 
     tasks = (
@@ -138,29 +232,39 @@ def build_journey(db: Session, student: User) -> JourneyOut:
         else []
     )
 
-    submissions = list(
-        db.scalars(
-            select(TaskSubmission)
-            .options(
-                selectinload(TaskSubmission.screenshots),
-                selectinload(TaskSubmission.reviews),
+    submissions = (
+        list(
+            db.scalars(
+                select(TaskSubmission)
+                .options(
+                    selectinload(TaskSubmission.screenshots),
+                    selectinload(TaskSubmission.reviews),
+                )
+                .join(Task, TaskSubmission.task_id == Task.id)
+                .where(
+                    TaskSubmission.student_id == student.id,
+                    Task.batch_id == enrollment.batch_id,
+                )
             )
-            .where(TaskSubmission.student_id == student.id)
         )
+        if enrollment
+        else []
     )
 
-    payment = db.scalar(
-        select(Payment)
-        .where(Payment.student_id == student.id)
-        .order_by(Payment.created_at.desc())
+    payment = (
+        db.scalar(
+            select(Payment)
+            .where(
+                Payment.student_id == student.id,
+                Payment.enrollment_id == enrollment.id,
+            )
+            .order_by(Payment.created_at.desc())
+        )
+        if enrollment
+        else None
     )
 
-    certificate = db.scalar(
-        select(Certificate).where(
-            Certificate.student_id == student.id,
-            Certificate.status == CertificateStatus.ISSUED,
-        )
-    )
+    certificate = certificate_for(db, enrollment) if enrollment else None
 
     notifications = list(
         db.scalars(
@@ -187,4 +291,9 @@ def build_journey(db: Session, student: User) -> JourneyOut:
         payment=PaymentOut.model_validate(payment) if payment else None,
         certificate=certificate_out(db, certificate) if certificate else None,
         notifications=[NotificationOut.model_validate(n) for n in notifications],
+        certificate_fee_paise=certificate_fee_paise(db),
+        history=build_history(db, student.id),
+        # A student may start another internship once the current one is
+        # certificated — finished and paid for, not merely task-complete.
+        can_enroll_again=stage == JourneyStage.CERTIFICATE_ISSUED,
     )
