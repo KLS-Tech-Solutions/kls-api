@@ -1,3 +1,5 @@
+> **Superseded — August 2026.** The product went open source and free. Payments were removed entirely, study notes were added, and storage was made private. Anything below about Razorpay, the certificate fee or a payment step is historical. See `README.md` for the current state.
+
 # Production Readiness Sprint — report
 
 7 Aug 2026 · `academy` · `admin-dashboard` · `kls-api`

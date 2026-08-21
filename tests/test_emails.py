@@ -218,7 +218,7 @@ def test_enrolment_emails_the_offer_letter(client, catalogue, student_token, out
     )
 
     message = only(outbox, "offer letter")
-    assert "KLS/ACAD/" in message["subject"]
+    assert "KLS-ACAD-" in message["subject"]
     assert "/dashboard/offer-letter" in message["html"]
     assert "LinkedIn" in message["html"], "the email must state the next step"
 
@@ -266,7 +266,7 @@ def test_review_decisions_email_the_student(
     assert "unlocked" in message["html"].lower()
 
 
-def test_final_approval_payment_and_certificate_all_email(
+def test_final_approval_issues_and_emails_the_certificate(
     client, catalogue, student_token, admin_token, outbox, screenshot_files
 ):
     headers = auth_headers(student_token)
@@ -316,30 +316,15 @@ def test_final_approval_payment_and_certificate_all_email(
     )
     message = only(outbox, "approved")
     assert "Every task is now approved" in message["html"]
-    assert "/dashboard/payment" in message["html"]
+    assert "/dashboard/certificate" in message["html"]
 
-    # --- payment and certificate ------------------------------------------
-    outbox.clear()
-    order = client.post("/api/v1/payments/order", headers=headers).json()
-    client.post(
-        "/api/v1/payments/verify",
-        headers=headers,
-        json={
-            "razorpay_order_id": order["order_id"],
-            "razorpay_payment_id": "pay_test",
-            "razorpay_signature": "sig",
-        },
-    )
-
-    receipt = only(outbox, "payment received")
-    # The amount is stated in the terms of service, the refund policy and at
-    # checkout — nowhere else, so it can only ever be changed in one place.
-    assert "50" not in receipt["html"]
-    assert "issuance fee" in receipt["html"]
-
+    # The certificate is issued in the same request as that final approval —
+    # there is no payment step in between — so both emails are already out.
     certificate = only(outbox, "certificate is ready")
-    assert "KLS-ACAD-" in certificate["subject"]
-    assert "/verify/KLS-ACAD-" in certificate["html"]
+    # Certificates carry their own prefix so they are never confused with an
+    # offer letter, and the suffix is random rather than sequential.
+    assert "KLS-CERT-" in certificate["subject"]
+    assert "/verify/KLS-CERT-" in certificate["html"]
 
 
 def test_admin_invitation_emails_the_invitee(client, db_session, admin_token, outbox):

@@ -5,7 +5,7 @@ Mirrors KLS_Academy_MVP_Database_Schema_v2 with a few additions noted below.
 
 from app.models.base import GUID, TimestampMixin, UUIDMixin
 from app.models.comms import ActivityLog, EmailLog, EmailTemplate, Notification
-from app.models.credential import Certificate, CertificateVerificationLog, Payment
+from app.models.credential import Certificate, CertificateVerificationLog
 from app.models.enums import (
     BatchStatus,
     CertificateStatus,
@@ -14,7 +14,6 @@ from app.models.enums import (
     EnrollmentStatus,
     JourneyStage,
     NotificationType,
-    PaymentStatus,
     PublishStatus,
     ReviewStatus,
     SubmissionStatus,
@@ -22,7 +21,7 @@ from app.models.enums import (
     UserStatus,
 )
 from app.models.internship import Enrollment, InternshipBatch, InternshipDomain, Task
-from app.models.settings import PlatformSetting
+from app.models.learning import ChapterRead, LearningChapter
 from app.models.submission import (
     AdminReview,
     LinkedInSubmission,
@@ -38,6 +37,7 @@ __all__ = [
     "AdminReview",
     "BatchStatus",
     "Certificate",
+    "ChapterRead",
     "CertificateStatus",
     "CertificateVerificationLog",
     "Difficulty",
@@ -51,13 +51,11 @@ __all__ = [
     "InternshipBatch",
     "InternshipDomain",
     "JourneyStage",
+    "LearningChapter",
     "LinkedInSubmission",
     "Notification",
     "NotificationType",
     "OfferLetter",
-    "Payment",
-    "PaymentStatus",
-    "PlatformSetting",
     "PublishStatus",
     "ReviewStatus",
     "StudentProfile",

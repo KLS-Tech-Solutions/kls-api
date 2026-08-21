@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.ratelimit import EMAIL_SEND, LOGIN, REGISTER, clear, enforce
 from app.core.deps import get_current_user
 from app.core.security import (
     TokenError,
@@ -58,6 +59,10 @@ def register(
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    # Registration sends a verification email, so an unlimited endpoint is a
+    # way to spend the daily quota and stop real students signing up.
+    enforce(request, REGISTER, scope="register")
+
     existing = db.scalar(select(User).where(User.email == payload.email.lower()))
     if existing is not None:
         raise HTTPException(
@@ -116,6 +121,10 @@ def register(
 
 @router.post("/login", response_model=TokenPair)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    # Bucketed per address as well as per IP, so one account being attacked
+    # does not lock out everyone else behind the same office connection.
+    enforce(request, LOGIN, scope="login", identifier=payload.email)
+
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
 
     # Same message either way — never reveal whether an email is registered.
@@ -136,6 +145,10 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This account has been suspended",
         )
+
+    # A correct password clears the counter — a legitimate person who fumbled
+    # their password a few times is not then rate-limited on the next screen.
+    clear(request, scope="login", identifier=payload.email)
 
     user.last_login_at = datetime.now(timezone.utc)
     log_activity(db, user.id, "Signed in", "auth", str(user.id), _client_ip(request))
@@ -198,9 +211,14 @@ def verify_email(payload: VerifyEmailRequest, db: Session = Depends(get_db)):
 @router.post("/forgot-password", status_code=status.HTTP_204_NO_CONTENT)
 def forgot_password(
     payload: ForgotPasswordRequest,
+    request: Request,
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    # Pointed at someone else's address this is an inbox-flooding tool, and it
+    # spends the platform's daily email allowance either way.
+    enforce(request, EMAIL_SEND, scope="forgot", identifier=payload.email)
+
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
 
     # Always 204 — an attacker must not learn which emails are registered.
@@ -222,6 +240,7 @@ def forgot_password(
 @router.post("/resend-verification", status_code=status.HTTP_204_NO_CONTENT)
 def resend_verification(
     payload: ForgotPasswordRequest,
+    request: Request,
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
@@ -229,6 +248,8 @@ def resend_verification(
     Always 204, like forgot-password — this endpoint must not confirm whether
     an address is registered or already verified.
     """
+    enforce(request, EMAIL_SEND, scope="resend", identifier=payload.email)
+
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
     if user is None or user.email_verified or user.status == UserStatus.DELETED:
         return

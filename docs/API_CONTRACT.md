@@ -71,17 +71,15 @@ trip rather than eight separate calls. Shape:
   "linkedinSubmission": { ... } | null,
   "tasks": [ ... ],
   "submissions": [ ... ],         // each with `screenshots[]` and `review` embedded
-  "payment": { ... } | null,
   "certificate": { ... } | null,
   "notifications": [ ... ],
-  "certificate_fee_paise": 5000,   // from platform_settings, never hardcoded
   "history": [ ... ],              // every internship taken, newest first
   "can_enroll_again": false        // true once the current one is certificated
 }
 ```
 
 **Everything above except `history` describes the *current* internship.** A student may
-take another once the current one is certificated, so `certificate`, `payment`,
+take another once the current one is certificated, so `certificate`,
 `submissions` and `linkedinSubmission` are all scoped to the current enrolment — a
 second internship starts genuinely empty.
 
@@ -114,6 +112,10 @@ the dashboard.
 | GET | `/me/notifications` | — | `AppNotification[]` |
 | PATCH | `/me/notifications/read` | `{ ids: string[] }` | `204` |
 | GET | `/me/certificate` | — | `Certificate` for the **current** internship · `null` when not issued |
+| GET | `/me/chapters` | — | `LearningChapter[]` for the current domain, with `is_read` |
+| GET | `/me/chapters/{id}/download` | — | The chapter PDF |
+| POST | `/me/chapters/{id}/read` | — | `204` · idempotent |
+| GET | `/screenshots/{id}` | — | Image bytes · owner or any admin, `404` otherwise |
 | GET | `/me/offer-letter/download` | — | PDF for the current internship |
 | GET | `/me/certificate/download` | — | PDF for the current internship |
 | GET | `/me/internships/{enrollment_id}/offer-letter/download` | — | PDF · `404` if the enrolment is not the caller's |
@@ -129,17 +131,6 @@ else's enrolment id returns `404`, not `403`, so ids cannot be probed.
 but issued certificates stay publicly verifiable — `Certificate.student_name` snapshots
 the recipient at issue for exactly this reason.
 
-### Platform settings
-
-| Method | Path | Body | Returns | Who |
-| --- | --- | --- | --- | --- |
-| GET | `/admin/settings` | — | `{ certificate_fee_paise, min_fee_paise, max_fee_paise }` | any admin |
-| PATCH | `/admin/settings/certificate-fee` | `{ amount_paise }` | same shape | **super admin** |
-
-`amount_paise` is bounded to ₹1–₹50,000; outside that it is `422`. **Orders already
-created keep their own amount** — `Payment.amount` is written at order time and never
-re-read, so a fee change cannot reprice an in-flight checkout.
-
 ### Team — super admin only
 
 | Method | Path | Body | Returns |
@@ -154,8 +145,6 @@ transmitted. `invite_url` is returned only while SMTP is unconfigured; once emai
 delivery works it is `null`. Re-inviting the same address invalidates any previous link.
 A super admin cannot change their own role or status, and the last active super admin
 cannot be suspended.
-| POST | `/payments/order` | — | `{ order_id, amount, currency, key_id }` |
-| POST | `/payments/verify` | `{ razorpay_order_id, razorpay_payment_id, razorpay_signature }` | `Payment` |
 
 **Task submission is multipart/form-data:**
 
@@ -169,7 +158,6 @@ cannot be suspended.
 | `screenshots` | Repeated file field, 3–8 files, PNG/JPG/WebP, ≤5 MB each |
 | `display_order` | Repeated, parallel to `screenshots`, 1-based |
 
-`amount` from `/payments/order` is **paise** (5000 = ₹50), matching Razorpay.
 
 ---
 
@@ -219,3 +207,42 @@ point `API_BASE_URL` at the real backend and temporarily edit that one service's
 - **Password reset and email verification** have UI and endpoints defined, but the forms
   still resolve locally — they need the token from the URL, which needs the email
   templates to exist first.
+
+
+---
+
+## Study notes — super admin
+
+| Method | Path | Body | Returns |
+| --- | --- | --- | --- |
+| GET | `/admin/chapters?domain_id=` | — | `LearningChapter[]` |
+| POST | `/admin/chapters` | `{ domain_id, title, summary?, order_number, difficulty, estimated_minutes }` | `201 LearningChapter` · `409` on a duplicate position |
+| PATCH | `/admin/chapters/{id}` | partial | `LearningChapter` |
+| POST | `/admin/chapters/{id}/pdf` | **multipart** `file` | `LearningChapter` · `422` if not a PDF or over 25 MB |
+| DELETE | `/admin/chapters/{id}` | — | `204` |
+| POST | `/admin/chapters/reorder` | `{ chapter_ids: [...] }` | `LearningChapter[]` |
+
+Chapters belong to a **domain**, so material is uploaded once per domain rather than
+per batch. `(domain_id, order_number)` is unique, which is why reorder writes in two
+passes — moving chapter 3 into position 1 while 1 still holds it would otherwise
+violate the constraint mid-update.
+
+---
+
+## There are no payments
+
+The platform is free. `/payments/*`, `/admin/payments` and `/admin/settings` are gone
+rather than disabled, and the journey has no `payment_pending` or `paid` stage. The
+certificate is issued inside the transaction that approves the final task.
+
+## Storage is private
+
+`upload_bytes` returns a storage **key**, not a URL, and nothing is served from a
+public bucket. Offer letters, certificates, screenshots and chapter PDFs all come back
+through authenticated routes that check who is asking. `ScreenshotOut.image_url` is
+rewritten to `/screenshots/{id}` on the way out, so both apps can render it in an
+`<img>` and the route decides whether the caller may see it.
+
+Document numbers are random (`KLS-ACAD-7QF3M2XKPB`), not sequential. The old
+`count(rows) + 1` scheme both raced under concurrent enrolment and let anyone holding
+one number guess the rest.

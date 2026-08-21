@@ -120,16 +120,8 @@ def complete(client, db_session, token, admin, batch, screenshot_files):
             json={"status": "approved", "remarks": "Approved."},
         )
 
-    order = client.post("/api/v1/payments/order", headers=headers).json()
-    client.post(
-        "/api/v1/payments/verify",
-        headers=headers,
-        json={
-            "razorpay_order_id": order["order_id"],
-            "razorpay_payment_id": "pay_test_123",
-            "razorpay_signature": "sig_test",
-        },
-    )
+    # Approving the final task is what issues the certificate — the platform
+    # is free, so there is nothing between finishing and being certificated.
 
 
 def test_a_second_internship_starts_from_scratch(
@@ -164,7 +156,6 @@ def test_a_second_internship_starts_from_scratch(
         "a fresh internship must not report the previous one's certificate"
     )
     assert journey["certificate"] is None
-    assert journey["payment"] is None
     assert journey["linkedinSubmission"] is None
     assert journey["submissions"] == []
     assert journey["domain"]["title"] == "Frontend Development"

@@ -1,37 +1,14 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.models.base import GUID, TimestampMixin, UUIDMixin
-from app.models.enums import CertificateStatus, PaymentStatus
+from app.models.enums import CertificateStatus
 
 
-class Payment(Base, UUIDMixin, TimestampMixin):
-    __tablename__ = "payments"
-
-    student_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    enrollment_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("enrollments.id", ondelete="SET NULL")
-    )
-    razorpay_order_id: Mapped[str | None] = mapped_column(String(100), index=True)
-    transaction_id: Mapped[str | None] = mapped_column(String(100), index=True)
-    signature: Mapped[str | None] = mapped_column(String(255))
-    # Stored in paise, matching Razorpay. ₹50 = 5000.
-    amount: Mapped[int] = mapped_column(Integer, nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
-    payment_status: Mapped[PaymentStatus] = mapped_column(
-        Enum(PaymentStatus, name="payment_status", native_enum=False),
-        default=PaymentStatus.CREATED,
-        nullable=False,
-        index=True,
-    )
-    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    failure_reason: Mapped[str | None] = mapped_column(String(255))
 
 
 class Certificate(Base, UUIDMixin, TimestampMixin):
@@ -42,9 +19,6 @@ class Certificate(Base, UUIDMixin, TimestampMixin):
     )
     enrollment_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("enrollments.id", ondelete="SET NULL")
-    )
-    payment_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("payments.id", ondelete="SET NULL")
     )
     certificate_number: Mapped[str] = mapped_column(
         String(50), unique=True, index=True, nullable=False

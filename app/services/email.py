@@ -420,8 +420,8 @@ def send_task_reviewed(
 ) -> Outbox:
     if approved:
         extra = (
-            "<p><strong>Every task is now approved.</strong> You can claim your "
-            "certificate.</p>"
+            "<p><strong>Every task is now approved.</strong> Your "
+            "certificate has been issued and is ready to download.</p>"
             if all_approved
             else "<p>Move on to your next task when you're ready.</p>"
         )
@@ -441,12 +441,12 @@ def send_task_reviewed(
                 "",
                 f"Reviewer's note: {remarks}",
                 "",
-                "Every task is now approved. You can claim your certificate."
+                "Every task is now approved. Your certificate has been issued."
                 if all_approved
                 else "Move on to your next task when you're ready.",
             ],
             cta=(
-                ("Claim your certificate", _academy("/dashboard/payment"))
+                ("Download your certificate", _academy("/dashboard/certificate"))
                 if all_approved
                 else ("Continue your tasks", _academy("/dashboard/tasks"))
             ),
@@ -479,30 +479,6 @@ def send_task_reviewed(
     )
 
 
-def send_payment_received(
-    background, *, user_id, to: str, transaction_id: str
-) -> Outbox:
-    return queue_email(
-        background,
-        user_id=user_id,
-        to=to,
-        subject="Payment received — your certificate is being issued",
-        template_name="payment_confirmation",
-        heading="Payment received",
-        body_html=(
-            "<p>We've received your certificate issuance fee.</p>"
-            f"<p style='font-size:13px;color:#7b8b99;'>Transaction {transaction_id}</p>"
-            "<p>Your certificate is being issued and will be ready to download in a "
-            "moment.</p>"
-        ),
-        body_text=[
-            "We've received your certificate issuance fee.",
-            f"Transaction {transaction_id}",
-            "",
-            "Your certificate is being issued and will be ready to download in a moment.",
-        ],
-        cta=("Go to your certificate", _academy("/dashboard/certificate")),
-    )
 
 
 def send_certificate_issued(

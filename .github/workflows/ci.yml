@@ -1,0 +1,98 @@
+name: CI
+
+# Every push and every pull request. A test suite nobody runs decays quietly,
+# and the failure mode is specific: a change made under time pressure, the
+# suite not run, a regression reaching production, and the test that would have
+# caught it failing for a fortnight.
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+
+concurrency:
+  # A new push supersedes the run in flight for the same branch.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests on PostgreSQL
+    runs-on: ubuntu-latest
+
+    # The whole point of running CI here rather than trusting a local run:
+    # the suite normally uses SQLite for speed, and the two databases disagree
+    # in exactly the areas this codebase depends on — transaction isolation,
+    # concurrent writes, constraint timing. A green SQLite run is weaker
+    # evidence than it looks.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kls
+          POSTGRES_PASSWORD: kls_ci_password
+          POSTGRES_DB: kls_academy_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U kls"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://kls:kls_ci_password@localhost:5432/kls_academy_test
+      SECRET_KEY: ci-secret-key-not-used-anywhere-real-0123456789
+      ENVIRONMENT: test
+      # Never reach a real mail server or a real bucket from CI.
+      SMTP_HOST: ""
+      R2_ACCESS_KEY_ID: ""
+      R2_SECRET_ACCESS_KEY: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pypdf ruff
+
+      - name: Lint
+        run: ruff check app tests scripts
+
+      - name: Migrations apply and reverse cleanly
+        # Against PostgreSQL, not SQLite. A migration that only works on one
+        # of them is how `learning_chapters.created_at` shipped NOT NULL with
+        # no default and broke every insert.
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: Tests
+        run: pytest -q
+
+      - name: The seed script runs
+        env:
+          FIRST_SUPERADMIN_EMAIL: ci@example.com
+          FIRST_SUPERADMIN_PASSWORD: ci-only-not-a-real-password
+        run: python scripts/seed.py
+
+  security:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Known vulnerabilities in dependencies
+        run: |
+          pip install pip-audit
+          # Advisory rather than blocking: a new CVE in a transitive
+          # dependency should tell you, not stop you shipping an unrelated fix.
+          pip-audit -r requirements.txt || true

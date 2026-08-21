@@ -1,3 +1,5 @@
+> **Superseded — August 2026.** The product went open source and free. Payments were removed entirely, study notes were added, and storage was made private. Anything below about Razorpay, the certificate fee or a payment step is historical. See `README.md` for the current state.
+
 # KLS Academy MVP 001 — status against the PRD
 
 Assessed 7 Aug 2026 against `KLS_Academy_MVP_001_PRD.pdf` and the Implementation Guide,

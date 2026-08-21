@@ -18,7 +18,6 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_student
 from app.models import (
-    Certificate,
     Enrollment,
     EnrollmentStatus,
     InternshipBatch,
@@ -27,8 +26,6 @@ from app.models import (
     LinkedInSubmission,
     NotificationType,
     OfferLetter,
-    Payment,
-    PaymentStatus,
     ReviewStatus,
     SubmissionStatus,
     Task,
@@ -40,12 +37,9 @@ from app.schemas.internship import (
     EnrollRequest,
     LinkedInSubmissionOut,
     LinkedInSubmitRequest,
-    PaymentOrderOut,
-    PaymentOut,
-    PaymentVerifyRequest,
     TaskSubmissionOut,
 )
-from app.services.aggregate import certificate_out, submission_out
+from app.services.aggregate import submission_out
 from app.services.journey import (
     certificate_for,
     compute_stage,
@@ -54,14 +48,9 @@ from app.services.journey import (
     linkedin_for,
 )
 from app.services.notifications import log_activity, notify
-from app.services.documents import generate_certificate, generate_offer_letter
-from app.services.email import (
-    send_certificate_issued,
-    send_offer_letter_ready,
-    send_payment_received,
-)
-from app.services.numbering import next_certificate_number, next_offer_letter_number
-from app.services.settings_store import certificate_fee_paise
+from app.services.documents import generate_offer_letter
+from app.services.email import send_offer_letter_ready
+from app.services.numbering import next_offer_letter_number
 from app.services.storage import StorageError, save_screenshot
 
 router = APIRouter(tags=["student"])
@@ -373,193 +362,3 @@ async def submit_task(
 
     db.refresh(submission)
     return submission_out(submission)
-
-
-@router.post("/payments/order", response_model=PaymentOrderOut)
-def create_payment_order(
-    student: User = Depends(get_current_student), db: Session = Depends(get_db)
-):
-    stage = compute_stage(db, student.id)
-    if not has_reached(stage, JourneyStage.ALL_TASKS_APPROVED):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Every task must be approved before payment unlocks",
-        )
-
-    if has_reached(stage, JourneyStage.PAID):
-        raise HTTPException(status_code=409, detail="Your certificate fee is already paid")
-
-    enrollment = get_active_enrollment(db, student.id)
-    # Read at order time and copied onto the Payment row, so a fee change
-    # mid-checkout never alters what an in-flight order is charged.
-    amount = certificate_fee_paise(db)
-
-    if settings.payments_configured:
-        import razorpay
-
-        client = razorpay.Client(
-            auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
-        )
-        order = client.order.create(
-            {"amount": amount, "currency": "INR", "payment_capture": 1}
-        )
-        order_id = order["id"]
-    else:
-        # Lets the flow be exercised before the Razorpay account exists.
-        order_id = f"order_dev_{uuid.uuid4().hex[:12]}"
-
-    payment = Payment(
-        student_id=student.id,
-        enrollment_id=enrollment.id if enrollment else None,
-        razorpay_order_id=order_id,
-        amount=amount,
-        payment_status=PaymentStatus.CREATED,
-    )
-    db.add(payment)
-    db.commit()
-
-    return PaymentOrderOut(
-        order_id=order_id,
-        amount=amount,
-        currency="INR",
-        key_id=settings.RAZORPAY_KEY_ID or "rzp_dev_placeholder",
-    )
-
-
-@router.post("/payments/verify", response_model=PaymentOut)
-def verify_payment(
-    payload: PaymentVerifyRequest,
-    background: BackgroundTasks,
-    student: User = Depends(get_current_student),
-    db: Session = Depends(get_db),
-):
-    payment = db.scalar(
-        select(Payment).where(
-            Payment.student_id == student.id,
-            Payment.razorpay_order_id == payload.razorpay_order_id,
-        )
-    )
-    if payment is None:
-        raise HTTPException(status_code=404, detail="Payment order not found")
-
-    if settings.payments_configured:
-        import razorpay
-
-        client = razorpay.Client(
-            auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET)
-        )
-        try:
-            client.utility.verify_payment_signature(
-                {
-                    "razorpay_order_id": payload.razorpay_order_id,
-                    "razorpay_payment_id": payload.razorpay_payment_id,
-                    "razorpay_signature": payload.razorpay_signature,
-                }
-            )
-        except Exception as exc:
-            payment.payment_status = PaymentStatus.FAILED
-            payment.failure_reason = "Signature verification failed"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Payment could not be verified",
-            ) from exc
-
-    payment.transaction_id = payload.razorpay_payment_id
-    payment.signature = payload.razorpay_signature
-    payment.payment_status = PaymentStatus.SUCCESS
-    payment.paid_at = datetime.now(timezone.utc)
-
-    notify(
-        db,
-        student.id,
-        "Payment successful",
-        "Your certificate is being issued.",
-        NotificationType.PAYMENT,
-    )
-    log_activity(db, student.id, "Paid certificate fee", "payment", str(payment.id))
-    db.flush()
-
-    certificate = _issue_certificate(db, student, payment)
-
-    db.commit()
-    db.refresh(payment)
-
-    send_payment_received(
-        background,
-        user_id=student.id,
-        to=student.email,
-        transaction_id=payment.transaction_id or "",
-    )
-
-    if certificate is not None:
-        db.refresh(certificate)
-        data = certificate_out(db, certificate)
-        send_certificate_issued(
-            background,
-            user_id=student.id,
-            to=student.email,
-            full_name=student.full_name,
-            certificate_number=certificate.certificate_number,
-            domain_title=data.domain_title,
-        )
-
-    return payment
-
-
-def _issue_certificate(db: Session, student: User, payment: Payment) -> Certificate | None:
-    """
-    Runs inside the payment transaction. A student who has paid must end up
-    with a certificate record even if PDF rendering fails — the file can be
-    regenerated, a missing record cannot be reconstructed.
-    """
-    enrollment = get_active_enrollment(db, student.id)
-
-    # Scoped to this enrolment: a student on their second internship already
-    # holds a certificate for the first, and must still receive a new one.
-    existing = db.scalar(
-        select(Certificate).where(
-            Certificate.student_id == student.id,
-            Certificate.enrollment_id == (enrollment.id if enrollment else None),
-        )
-    )
-    if existing is not None:
-        return existing
-
-    batch = db.get(InternshipBatch, enrollment.batch_id) if enrollment else None
-    domain = db.get(InternshipDomain, batch.domain_id) if batch else None
-
-    certificate = Certificate(
-        student_id=student.id,
-        enrollment_id=enrollment.id if enrollment else None,
-        payment_id=payment.id,
-        certificate_number=next_certificate_number(db),
-        student_name=student.full_name,
-    )
-    db.add(certificate)
-
-    try:
-        certificate_url, qr_url = generate_certificate(
-            certificate_number=certificate.certificate_number,
-            student_name=student.full_name,
-            domain_title=domain.title if domain else "KLS Academy Internship",
-            duration=domain.duration if domain else "",
-        )
-        certificate.certificate_url = certificate_url
-        certificate.qr_code_url = qr_url
-    except Exception:  # noqa: BLE001
-        pass
-
-    if enrollment is not None:
-        enrollment.status = EnrollmentStatus.COMPLETED
-        enrollment.completed_at = datetime.now(timezone.utc)
-
-    notify(
-        db,
-        student.id,
-        "Certificate issued",
-        f"Certificate {certificate.certificate_number} is ready to download.",
-        NotificationType.CERTIFICATE,
-    )
-
-    return certificate

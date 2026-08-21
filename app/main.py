@@ -79,6 +79,33 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """
+    Response headers every browser understands and every audit asks for.
+
+    No Content-Security-Policy: this API only ever returns JSON, PDFs and
+    images, so a policy governing script sources would be decoration. The
+    frontends set their own, where it means something.
+    """
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # The admin console must never be framed — an invisible iframe plus a
+    # misplaced click is how an administrator approves something they cannot
+    # see.
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    if settings.is_production:
+        # Only in production: sending HSTS from a local http:// server pins the
+        # browser to https for localhost and breaks every other project on the
+        # machine.
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_handler(_: Request, exc: RequestValidationError):
     """
@@ -92,15 +119,10 @@ async def validation_handler(_: Request, exc: RequestValidationError):
     )
 
 
-# Local development fallback: when R2 is unconfigured, uploads land in ./media
-# and are served from here so the stored URLs actually resolve.
-if not settings.storage_configured:
-    from pathlib import Path
-
-    from fastapi.staticfiles import StaticFiles
-
-    Path("media").mkdir(exist_ok=True)
-    app.mount("/media", StaticFiles(directory="media"), name="media")
+# There is deliberately no static mount for ./media. Student documents,
+# screenshots and study notes are served only through authenticated routes
+# that check who is asking — mounting the directory would put every stored
+# file back on a public URL, which is the exposure this design removed.
 
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)

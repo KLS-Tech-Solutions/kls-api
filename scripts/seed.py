@@ -34,7 +34,6 @@ EMAIL_TEMPLATES = [
     ("task_assigned", "A new task is available", "A new task has been added to your internship."),
     ("task_approved", "Task approved", "Your submission has been approved."),
     ("task_rejected", "Task needs changes", "Please review the reviewer's remarks and resubmit."),
-    ("payment_confirmation", "Payment received", "Your certificate is being issued."),
     ("certificate_issued", "Your certificate is ready", "Download your QR-verified certificate."),
     ("password_reset", "Reset your password", "Use the link to choose a new password."),
     ("admin_invite", "You've been invited to the KLS Academy console", "Set your password to begin."),
@@ -57,6 +56,15 @@ def seed() -> None:
             select(User).where(User.email == settings.FIRST_SUPERADMIN_EMAIL.lower())
         )
         if admin is None:
+            # Hashing an empty string would produce a real, usable hash for a
+            # password of "" — an open door on a public repository.
+            if not settings.FIRST_SUPERADMIN_PASSWORD:
+                raise SystemExit(
+                    "Set FIRST_SUPERADMIN_PASSWORD in .env before seeding.\n"
+                    "Generate one with: "
+                    'python -c "import secrets; print(secrets.token_urlsafe(18))"'
+                )
+
             admin = User(
                 full_name="KLS Administrator",
                 email=settings.FIRST_SUPERADMIN_EMAIL.lower(),

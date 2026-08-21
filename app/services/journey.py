@@ -21,8 +21,6 @@ from app.models import (
     JourneyStage,
     LinkedInSubmission,
     OfferLetter,
-    Payment,
-    PaymentStatus,
     ReviewStatus,
     SubmissionStatus,
     Task,
@@ -37,8 +35,6 @@ STAGE_ORDER: list[JourneyStage] = [
     JourneyStage.LINKEDIN_APPROVED,
     JourneyStage.TASKS_IN_PROGRESS,
     JourneyStage.ALL_TASKS_APPROVED,
-    JourneyStage.PAYMENT_PENDING,
-    JourneyStage.PAID,
     JourneyStage.CERTIFICATE_ISSUED,
 ]
 
@@ -132,17 +128,6 @@ def compute_stage(db: Session, student_id: uuid.UUID) -> JourneyStage:
     if certificate_for(db, enrollment) is not None:
         return JourneyStage.CERTIFICATE_ISSUED
 
-    # --- payment ----------------------------------------------------------
-    successful_payment = db.scalar(
-        select(Payment).where(
-            Payment.student_id == student_id,
-            Payment.enrollment_id == enrollment.id,
-            Payment.payment_status == PaymentStatus.SUCCESS,
-        )
-    )
-    if successful_payment is not None:
-        return JourneyStage.PAID
-
     # --- tasks ------------------------------------------------------------
     # Disabled tasks are excluded everywhere: a task parked by an admin must
     # not keep a student from completing their internship.
@@ -171,21 +156,9 @@ def compute_stage(db: Session, student_id: uuid.UUID) -> JourneyStage:
         )
 
         if len(approved_task_ids) == len(technical_task_ids):
-            # Payment row exists but hasn't succeeded → they've started paying.
-            pending_payment = db.scalar(
-                select(Payment).where(
-                    Payment.student_id == student_id,
-                    Payment.enrollment_id == enrollment.id,
-                    Payment.payment_status.in_(
-                        [PaymentStatus.CREATED, PaymentStatus.PENDING, PaymentStatus.FAILED]
-                    ),
-                )
-            )
-            return (
-                JourneyStage.PAYMENT_PENDING
-                if pending_payment is not None
-                else JourneyStage.ALL_TASKS_APPROVED
-            )
+            # The certificate is issued the moment the last task is approved,
+            # so this stage is only ever seen if that issue step failed.
+            return JourneyStage.ALL_TASKS_APPROVED
 
         has_any_submission = db.scalar(
             select(TaskSubmission.id).where(

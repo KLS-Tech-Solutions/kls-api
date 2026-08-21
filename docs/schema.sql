@@ -10,11 +10,8 @@
 --
 -- This file exists as a fallback for running the DDL manually in pgAdmin.
 -- It includes the alembic_version row, so Alembic will still consider the
--- database up to date afterwards and future migrations will apply cleanly.
+-- database up to date afterwards.
 --
--- Target: PostgreSQL, database `kls_academy`.
--- ===========================================================================
-
 BEGIN;
 
 CREATE TABLE alembic_version (
@@ -378,6 +375,127 @@ CREATE TABLE certificate_verification_logs (
 CREATE INDEX ix_certificate_verification_logs_certificate_id ON certificate_verification_logs (certificate_id);
 
 INSERT INTO alembic_version (version_num) VALUES ('87f2faee7f16') RETURNING alembic_version.version_num;
+
+-- Running upgrade 87f2faee7f16 -> 02584f9e6f21
+
+ALTER TABLE internship_domains ADD COLUMN image_url VARCHAR(500);
+
+ALTER TABLE internship_domains ADD COLUMN display_order INTEGER DEFAULT '0' NOT NULL;
+
+ALTER TABLE tasks ADD COLUMN is_active BOOLEAN DEFAULT true NOT NULL;
+
+ALTER TABLE tasks ADD COLUMN instructions TEXT;
+
+ALTER TABLE tasks ADD COLUMN min_screenshots INTEGER DEFAULT '3' NOT NULL;
+
+ALTER TABLE tasks ADD COLUMN max_screenshots INTEGER DEFAULT '8' NOT NULL;
+
+ALTER TABLE tasks ADD COLUMN require_github BOOLEAN DEFAULT true NOT NULL;
+
+ALTER TABLE tasks ADD COLUMN require_explanation BOOLEAN DEFAULT true NOT NULL;
+
+ALTER TABLE tasks ADD COLUMN min_explanation_chars INTEGER DEFAULT '120' NOT NULL;
+
+ALTER TABLE tasks ADD COLUMN require_live_demo BOOLEAN DEFAULT false NOT NULL;
+
+UPDATE alembic_version SET version_num='02584f9e6f21' WHERE alembic_version.version_num = '87f2faee7f16';
+
+-- Running upgrade 02584f9e6f21 -> 3c91a7de40b2
+
+CREATE TABLE platform_settings (
+    id UUID NOT NULL, 
+    key VARCHAR(80) NOT NULL, 
+    value TEXT NOT NULL, 
+    updated_by UUID, 
+    updated_at_utc TIMESTAMP WITH TIME ZONE, 
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL, 
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL, 
+    PRIMARY KEY (id), 
+    FOREIGN KEY(updated_by) REFERENCES users (id) ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX ix_platform_settings_key ON platform_settings (key);
+
+ALTER TABLE users ADD COLUMN deleted_at TIMESTAMP WITH TIME ZONE;
+
+ALTER TABLE certificates ADD COLUMN student_name VARCHAR(100);
+
+UPDATE certificates
+        SET student_name = (
+            SELECT full_name FROM users WHERE users.id = certificates.student_id
+        )
+        WHERE student_name IS NULL;
+
+UPDATE alembic_version SET version_num='3c91a7de40b2' WHERE alembic_version.version_num = '02584f9e6f21';
+
+-- Running upgrade 3c91a7de40b2 -> 5e2c81b0f7aa
+
+CREATE TABLE learning_chapters (
+    id UUID NOT NULL, 
+    domain_id UUID NOT NULL, 
+    title VARCHAR(200) NOT NULL, 
+    summary TEXT, 
+    order_number INTEGER NOT NULL, 
+    difficulty VARCHAR(20) NOT NULL, 
+    pdf_url VARCHAR(500), 
+    pdf_filename VARCHAR(255), 
+    pdf_size_bytes INTEGER, 
+    estimated_minutes INTEGER NOT NULL, 
+    status VARCHAR(20) NOT NULL, 
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP) NOT NULL, 
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP) NOT NULL, 
+    PRIMARY KEY (id), 
+    FOREIGN KEY(domain_id) REFERENCES internship_domains (id) ON DELETE CASCADE, 
+    CONSTRAINT uq_chapter_position UNIQUE (domain_id, order_number)
+);
+
+CREATE INDEX ix_learning_chapters_domain_id ON learning_chapters (domain_id);
+
+CREATE TABLE chapter_reads (
+    id UUID NOT NULL, 
+    student_id UUID NOT NULL, 
+    chapter_id UUID NOT NULL, 
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP) NOT NULL, 
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP) NOT NULL, 
+    PRIMARY KEY (id), 
+    FOREIGN KEY(student_id) REFERENCES users (id) ON DELETE CASCADE, 
+    FOREIGN KEY(chapter_id) REFERENCES learning_chapters (id) ON DELETE CASCADE, 
+    CONSTRAINT uq_chapter_read UNIQUE (student_id, chapter_id)
+);
+
+CREATE INDEX ix_chapter_reads_student_id ON chapter_reads (student_id);
+
+CREATE INDEX ix_chapter_reads_chapter_id ON chapter_reads (chapter_id);
+
+ALTER TABLE certificates DROP COLUMN payment_id;
+
+DROP TABLE payments;
+
+DROP INDEX ix_platform_settings_key;
+
+DROP TABLE platform_settings;
+
+UPDATE alembic_version SET version_num='5e2c81b0f7aa' WHERE alembic_version.version_num = '3c91a7de40b2';
+
+-- Running upgrade 5e2c81b0f7aa -> 9d4f1c7ab653
+
+UPDATE learning_chapters SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL;
+
+ALTER TABLE learning_chapters ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE learning_chapters SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL;
+
+ALTER TABLE learning_chapters ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE chapter_reads SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL;
+
+ALTER TABLE chapter_reads ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE chapter_reads SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL;
+
+ALTER TABLE chapter_reads ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE alembic_version SET version_num='9d4f1c7ab653' WHERE alembic_version.version_num = '5e2c81b0f7aa';
 
 COMMIT;
 

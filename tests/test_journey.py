@@ -134,7 +134,7 @@ def test_full_journey(client, db_session, catalogue, student_token, admin_token,
     assert stage_of(client, student_token) == "offer_letter_generated"
 
     journey = client.get("/api/v1/me/journey", headers=student_headers).json()
-    assert journey["offerLetter"]["offer_letter_number"].startswith("KLS/ACAD/")
+    assert journey["offerLetter"]["offer_letter_number"].startswith("KLS-ACAD-")
 
     # A student holds one internship at a time.
     assert (
@@ -222,9 +222,6 @@ def test_full_journey(client, db_session, catalogue, student_token, admin_token,
     assert len(response.json()["screenshots"]) == 3
     assert stage_of(client, student_token) == "tasks_in_progress"
 
-    # Payment stays locked while work is outstanding.
-    assert client.post("/api/v1/payments/order", headers=student_headers).status_code == 403
-
     # 8 — reject, then resubmit ---------------------------------------------
     response = client.post(
         f"/api/v1/admin/task-submissions/{submission_id}/review",
@@ -275,31 +272,18 @@ def test_full_journey(client, db_session, catalogue, student_token, admin_token,
         headers=admin_headers,
         json={"status": "approved", "remarks": "Approved."},
     )
-    assert stage_of(client, student_token) == "all_tasks_approved"
 
-    # 10 — payment unlocks ---------------------------------------------------
-    order = client.post("/api/v1/payments/order", headers=student_headers)
-    assert order.status_code == 200
-    assert order.json()["amount"] == 5000  # paise
-    assert stage_of(client, student_token) == "payment_pending"
-
-    response = client.post(
-        "/api/v1/payments/verify",
-        headers=student_headers,
-        json={
-            "razorpay_order_id": order.json()["order_id"],
-            "razorpay_payment_id": "pay_test_123",
-            "razorpay_signature": "sig_test",
-        },
-    )
-    assert response.status_code == 200
-    assert response.json()["payment_status"] == "success"
-
-    # Paying issues the certificate, so the journey completes in one step.
+    # 10 — approving the last task completes the internship ---------------
+    # There is no payment step: the platform is free, so the reviewer's click
+    # on the final task is what issues the certificate.
     assert stage_of(client, student_token) == "certificate_issued"
 
+    journey = client.get("/api/v1/me/journey", headers=student_headers).json()
+    assert journey["certificate"]["certificate_number"].startswith("KLS-CERT-")
+    assert journey["can_enroll_again"] is True
+
     certificate = client.get("/api/v1/me/certificate", headers=student_headers).json()
-    assert certificate["certificate_number"].startswith("KLS-ACAD-")
+    assert certificate["certificate_number"].startswith("KLS-CERT-")
     assert certificate["student_name"] == "Ananya Rao"
 
     # 11 — the student got told at every step -------------------------------
@@ -308,7 +292,6 @@ def test_full_journey(client, db_session, catalogue, student_token, admin_token,
     assert "Welcome to KLS Academy" in titles
     assert "Offer letter generated" in titles
     assert "LinkedIn task approved" in titles
-    assert "Payment successful" in titles
     assert "Certificate issued" in titles
 
 
@@ -340,5 +323,5 @@ def test_admin_sees_student_journey_in_the_same_shape(
     ).json()
     assert set(journey) >= {
         "stage", "user", "domain", "batch", "enrollment", "offerLetter",
-        "tasks", "submissions", "payment", "certificate", "notifications",
+        "tasks", "submissions", "certificate", "notifications",
     }

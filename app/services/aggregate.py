@@ -15,8 +15,6 @@ from app.models import (
     LinkedInSubmission,
     Notification,
     OfferLetter,
-    Payment,
-    PaymentStatus,
     StudentProfile,
     SubmissionStatus,
     Task,
@@ -33,13 +31,11 @@ from app.schemas.internship import (
     LinkedInSubmissionOut,
     NotificationOut,
     OfferLetterOut,
-    PaymentOut,
     ProfileOut,
     TaskOut,
     TaskSubmissionOut,
 )
 from app.schemas.auth import UserOut
-from app.services.settings_store import certificate_fee_paise
 from app.services.journey import (
     certificate_for,
     compute_stage,
@@ -251,19 +247,6 @@ def build_journey(db: Session, student: User) -> JourneyOut:
         else []
     )
 
-    payment = (
-        db.scalar(
-            select(Payment)
-            .where(
-                Payment.student_id == student.id,
-                Payment.enrollment_id == enrollment.id,
-            )
-            .order_by(Payment.created_at.desc())
-        )
-        if enrollment
-        else None
-    )
-
     certificate = certificate_for(db, enrollment) if enrollment else None
 
     notifications = list(
@@ -288,10 +271,8 @@ def build_journey(db: Session, student: User) -> JourneyOut:
         ),
         tasks=[TaskOut.model_validate(t) for t in tasks],
         submissions=[submission_out(s) for s in submissions],
-        payment=PaymentOut.model_validate(payment) if payment else None,
         certificate=certificate_out(db, certificate) if certificate else None,
         notifications=[NotificationOut.model_validate(n) for n in notifications],
-        certificate_fee_paise=certificate_fee_paise(db),
         history=build_history(db, student.id),
         # A student may start another internship once the current one is
         # certificated — finished and paid for, not merely task-complete.

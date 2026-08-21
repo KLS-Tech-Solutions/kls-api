@@ -105,10 +105,6 @@ c.post(f"/api/v1/admin/task-submissions/{sub[0]['id']}/review", headers=H(owner_
        json={"status":"approved","remarks":"Approved."})
 ok("All tasks approved unlocks payment", stage() == "all_tasks_approved")
 
-order = c.post("/api/v1/payments/order", headers=H(s)).json()
-c.post("/api/v1/payments/verify", headers=H(s), json={
-  "razorpay_order_id":order["order_id"],"razorpay_payment_id":"pay_test","razorpay_signature":"sig"})
-ok("Payment issues the certificate", stage() == "certificate_issued")
 
 cert = c.get("/api/v1/me/certificate", headers=H(s)).json()
 ok("Certificate verifies publicly",

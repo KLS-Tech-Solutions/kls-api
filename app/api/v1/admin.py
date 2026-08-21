@@ -19,8 +19,6 @@ from app.models import (
     LinkedInSubmission,
     NotificationType,
     OfferLetter,
-    Payment,
-    PaymentStatus,
     ReviewStatus,
     SubmissionStatus,
     Task,
@@ -39,7 +37,6 @@ from app.schemas.internship import (
     DomainUpdate,
     JourneyOut,
     LinkedInSubmissionOut,
-    PaymentOut,
     ReviewRequest,
     TaskCreate,
     TaskOut,
@@ -48,9 +45,20 @@ from app.schemas.internship import (
     TaskUpdate,
 )
 from app.schemas.auth import UserOut
-from app.services.aggregate import batch_out, build_journey, domain_out, submission_out
-from app.services.journey import compute_stage
-from app.services.email import send_linkedin_reviewed, send_task_reviewed
+from app.services.aggregate import (
+    batch_out,
+    build_journey,
+    certificate_out,
+    domain_out,
+    submission_out,
+)
+from app.services.certificates import issue_if_complete
+from app.services.journey import compute_stage, get_active_enrollment
+from app.services.email import (
+    send_certificate_issued,
+    send_linkedin_reviewed,
+    send_task_reviewed,
+)
 from app.services.notifications import log_activity, notify
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -226,18 +234,27 @@ def review_task_submission(
         db, admin.id, f"Reviewed task submission ({payload.status.value})",
         "review", str(submission.id),
     )
+
+    # The internship is free, so approving the last task is what completes it.
+    # Issued in this transaction rather than a later step: the reviewer's click
+    # is the event, and there is nothing else for the student to do.
+    # The approval must be visible to the completion check below. The session
+    # is configured without autoflush, so this is not optional.
+    db.flush()
+
+    student = db.get(User, submission.student_id)
+    certificate = None
+    if student is not None and payload.status == ReviewStatus.APPROVED:
+        enrollment = get_active_enrollment(db, student.id)
+        if enrollment is not None:
+            certificate = issue_if_complete(db, student, enrollment)
+
     db.commit()
     db.refresh(submission)
 
-    student = db.get(User, submission.student_id)
     if student is not None:
         approved = payload.status == ReviewStatus.APPROVED
-        # Tell them explicitly when this was the last one — that is the moment
-        # the certificate becomes available and it should not be a surprise.
-        finished = approved and compute_stage(db, student.id) in (
-            JourneyStage.ALL_TASKS_APPROVED,
-            JourneyStage.PAYMENT_PENDING,
-        )
+        finished = certificate is not None
         send_task_reviewed(
             background,
             user_id=student.id,
@@ -247,6 +264,19 @@ def review_task_submission(
             remarks=payload.remarks,
             all_approved=finished,
         )
+
+        # The certificate email only goes out when one was actually issued.
+        if certificate is not None:
+            db.refresh(certificate)
+            data = certificate_out(db, certificate)
+            send_certificate_issued(
+                background,
+                user_id=student.id,
+                to=student.email,
+                full_name=student.full_name,
+                certificate_number=certificate.certificate_number,
+                domain_title=data.domain_title,
+            )
 
     return submission_out(submission)
 
@@ -532,24 +562,12 @@ def reorder_tasks(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/payments", response_model=list[PaymentOut])
-def list_payments(
-    status_filter: PaymentStatus | None = Query(default=None, alias="status"),
-    _: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    query = select(Payment)
-    if status_filter:
-        query = query.where(Payment.payment_status == status_filter)
-    return list(db.scalars(query.order_by(Payment.created_at.desc()).limit(500)))
 
 
 @router.get("/certificates", response_model=list[CertificateOut])
 def list_certificates(
     _: User = Depends(get_current_admin), db: Session = Depends(get_db)
 ):
-    from app.services.aggregate import certificate_out
-
     certificates = db.scalars(select(Certificate).order_by(Certificate.issued_at.desc()))
     return [certificate_out(db, c) for c in certificates]
 
@@ -561,8 +579,6 @@ def revoke_certificate(
     admin: User = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):
-    from app.services.aggregate import certificate_out
-
     certificate = db.get(Certificate, certificate_id)
     if certificate is None:
         raise HTTPException(status_code=404, detail="Certificate not found")
@@ -586,12 +602,6 @@ def analytics_overview(
         stage = compute_stage(db, student.id).value
         by_stage[stage] = by_stage.get(stage, 0) + 1
 
-    revenue = db.scalar(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.payment_status == PaymentStatus.SUCCESS
-        )
-    )
-
     return {
         "students_total": len(students),
         "students_by_stage": by_stage,
@@ -610,7 +620,6 @@ def analytics_overview(
                 Certificate.status == CertificateStatus.ISSUED
             )
         ),
-        "revenue_paise": revenue or 0,
     }
 
 

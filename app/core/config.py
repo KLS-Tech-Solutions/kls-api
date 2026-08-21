@@ -35,10 +35,6 @@ class Settings(BaseSettings):
     R2_BUCKET: str = "kls-academy"
     R2_PUBLIC_BASE_URL: str = ""
 
-    # --- payments ----------------------------------------------------------
-    RAZORPAY_KEY_ID: str = ""
-    RAZORPAY_KEY_SECRET: str = ""
-    CERTIFICATE_FEE_PAISE: int = 5000
 
     # --- email -------------------------------------------------------------
     SMTP_HOST: str = ""
@@ -53,7 +49,9 @@ class Settings(BaseSettings):
 
     # --- bootstrap ---------------------------------------------------------
     FIRST_SUPERADMIN_EMAIL: str = "admin@klstechsolutions.in"
-    FIRST_SUPERADMIN_PASSWORD: str = "ChangeThisNow123"
+    # No default. The repository is public, so a working placeholder here
+    # would be the first thing anyone tried against a fresh deployment.
+    FIRST_SUPERADMIN_PASSWORD: str = ""
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -70,9 +68,6 @@ class Settings(BaseSettings):
     def storage_configured(self) -> bool:
         return bool(self.R2_ACCESS_KEY_ID and self.R2_SECRET_ACCESS_KEY)
 
-    @property
-    def payments_configured(self) -> bool:
-        return bool(self.RAZORPAY_KEY_ID and self.RAZORPAY_KEY_SECRET)
 
 
     def validate_for_runtime(self) -> list[str]:
@@ -95,8 +90,8 @@ class Settings(BaseSettings):
                 problems.append("DEBUG must be false in production")
             if any(o.startswith("http://") for o in self.CORS_ORIGINS):
                 problems.append("CORS_ORIGINS contains a plain-http origin")
-            if self.FIRST_SUPERADMIN_PASSWORD == "ChangeThisNow123":
-                problems.append("FIRST_SUPERADMIN_PASSWORD is still the placeholder")
+            if not self.FIRST_SUPERADMIN_PASSWORD:
+                problems.append("FIRST_SUPERADMIN_PASSWORD is not set")
 
         return problems
 

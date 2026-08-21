@@ -1,14 +1,13 @@
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 from app.models import (
     BatchStatus,
     Difficulty,
     EnrollmentStatus,
     JourneyStage,
-    PaymentStatus,
     PublishStatus,
     ReviewStatus,
     SubmissionStatus,
@@ -208,6 +207,16 @@ class ScreenshotOut(ORMModel):
     image_url: str
     display_order: int
 
+    @model_validator(mode="after")
+    def _route_through_the_api(self):
+        """
+        `image_url` holds a storage key, which no browser can fetch. Both apps
+        render this straight into an <img>, so it is rewritten to the
+        authenticated route that streams the bytes.
+        """
+        object.__setattr__(self, "image_url", f"/screenshots/{self.id}")
+        return self
+
 
 class AdminReviewOut(ORMModel):
     id: uuid.UUID
@@ -231,29 +240,6 @@ class TaskSubmissionOut(ORMModel):
     attempt: int
     screenshots: list[ScreenshotOut] = []
     review: AdminReviewOut | None = None
-
-
-class PaymentOut(ORMModel):
-    id: uuid.UUID
-    student_id: uuid.UUID
-    transaction_id: str | None
-    amount: int
-    currency: str
-    payment_status: PaymentStatus
-    paid_at: datetime | None
-
-
-class PaymentOrderOut(BaseModel):
-    order_id: str
-    amount: int
-    currency: str = "INR"
-    key_id: str
-
-
-class PaymentVerifyRequest(BaseModel):
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    razorpay_signature: str
 
 
 class CertificateOut(ORMModel):
@@ -360,17 +346,63 @@ class JourneyOut(BaseModel):
     linkedinSubmission: LinkedInSubmissionOut | None
     tasks: list[TaskOut]
     submissions: list[TaskSubmissionOut]
-    payment: PaymentOut | None
     certificate: CertificateOut | None
     notifications: list[NotificationOut]
-    # In paise, read from the platform settings row. The checkout screen shows
-    # this rather than hardcoding an amount, so a super admin can change the
-    # fee without a deploy.
-    certificate_fee_paise: int = 0
-
     # Every internship the student has taken, newest first — the current one
     # included, flagged `is_current`. Drives the "My internships" screen.
     history: list[InternshipHistoryOut] = []
     # True once the current internship is certificated, which is when a
     # student becomes eligible to start another.
     can_enroll_again: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Learning notes
+# ---------------------------------------------------------------------------
+
+
+class ChapterOut(ORMModel):
+    """One chapter of study notes. `is_read` is per-student, filled in by the
+    student endpoint and left false for admin listings."""
+
+    id: uuid.UUID
+    domain_id: uuid.UUID
+    title: str
+    summary: str | None
+    order_number: int
+    difficulty: Difficulty
+    pdf_url: str | None
+    pdf_filename: str | None
+    pdf_size_bytes: int | None
+    estimated_minutes: int
+    status: PublishStatus
+    is_read: bool = False
+    updated_by: uuid.UUID | None = None
+    # Filled in by the admin listing so the console does not have to resolve
+    # a user id per row.
+    updated_by_name: str = ""
+
+
+class ChapterCreate(BaseModel):
+    domain_id: uuid.UUID
+    title: str = Field(min_length=3, max_length=200)
+    summary: str | None = None
+    order_number: int = Field(ge=1)
+    difficulty: Difficulty = Difficulty.BEGINNER
+    estimated_minutes: int = Field(default=20, ge=1, le=600)
+    status: PublishStatus = PublishStatus.ACTIVE
+
+
+class ChapterUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=3, max_length=200)
+    summary: str | None = None
+    order_number: int | None = Field(default=None, ge=1)
+    difficulty: Difficulty | None = None
+    estimated_minutes: int | None = Field(default=None, ge=1, le=600)
+    status: PublishStatus | None = None
+
+
+class ChapterReorder(BaseModel):
+    """Full ordered list of chapter ids — avoids gaps and duplicate positions."""
+
+    chapter_ids: list[uuid.UUID]

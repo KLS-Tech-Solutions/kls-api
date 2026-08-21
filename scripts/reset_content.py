@@ -17,6 +17,7 @@ from app.models import (
     ActivityLog,
     AdminReview,
     Certificate,
+    ChapterRead,
     CertificateVerificationLog,
     EmailLog,
     EmailToken,
@@ -26,7 +27,6 @@ from app.models import (
     LinkedInSubmission,
     Notification,
     OfferLetter,
-    Payment,
     StudentProfile,
     Task,
     TaskScreenshot,
@@ -39,7 +39,6 @@ from app.models import (
 CONTENT_TABLES = [
     CertificateVerificationLog,
     Certificate,
-    Payment,
     AdminReview,
     TaskScreenshot,
     TaskSubmission,

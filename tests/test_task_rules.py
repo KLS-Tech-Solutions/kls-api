@@ -217,7 +217,7 @@ def test_disabled_task_does_not_block_completion(client, ready_student, screensh
     submission = submit(client, ready_student["token"], live, screenshot_files[:1])
     assert submission.status_code == 201
 
-    # Approve it as an admin, then the journey should reach all_tasks_approved.
+    # Approve it as an admin, and the internship completes.
     admin = User(
         full_name="Admin",
         email="admin@klsacademy.example.com",
@@ -246,7 +246,7 @@ def test_disabled_task_does_not_block_completion(client, ready_student, screensh
     journey = client.get(
         "/api/v1/me/journey", headers=auth_headers(ready_student["token"])
     ).json()
-    assert journey["stage"] == "all_tasks_approved"
+    assert journey["stage"] == "certificate_issued"
 
 
 def test_next_task_unlocks_on_submission_not_approval(
@@ -363,9 +363,9 @@ def test_certificate_still_requires_every_task_approved(
     assert journey["stage"] == "tasks_in_progress"
 
     # Payment is still shut until a reviewer has signed both off.
-    assert (
-        client.post(
-            "/api/v1/payments/order", headers=auth_headers(ready_student["token"])
-        ).status_code
-        == 403
-    )
+    # The certificate is withheld while any task is still unapproved.
+    journey = client.get(
+        "/api/v1/me/journey", headers=auth_headers(ready_student["token"])
+    ).json()
+    assert journey["certificate"] is None
+    assert journey["stage"] != "certificate_issued"

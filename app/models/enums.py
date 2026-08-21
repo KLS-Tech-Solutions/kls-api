@@ -62,13 +62,6 @@ class SubmissionStatus(StrEnum):
     REJECTED = "rejected"
 
 
-class PaymentStatus(StrEnum):
-    CREATED = "created"
-    PENDING = "pending"
-    SUCCESS = "success"
-    FAILED = "failed"
-
-
 class CertificateStatus(StrEnum):
     ISSUED = "issued"
     REVOKED = "revoked"
@@ -105,6 +98,4 @@ class JourneyStage(StrEnum):
     LINKEDIN_APPROVED = "linkedin_approved"
     TASKS_IN_PROGRESS = "tasks_in_progress"
     ALL_TASKS_APPROVED = "all_tasks_approved"
-    PAYMENT_PENDING = "payment_pending"
-    PAID = "paid"
     CERTIFICATE_ISSUED = "certificate_issued"
