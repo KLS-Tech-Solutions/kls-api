@@ -4,60 +4,42 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_student
 from app.core.security import generate_url_token, hash_password, verify_password
 from app.models import (
     Certificate,
-    CertificateStatus,
     EmailToken,
     Enrollment,
-    EnrollmentStatus,
     InternshipBatch,
     InternshipDomain,
-    JourneyStage,
-    LinkedInSubmission,
     Notification,
-    NotificationType,
     OfferLetter,
-    ReviewStatus,
     StudentProfile,
-    SubmissionStatus,
     Task,
-    TaskScreenshot,
-    TaskSubmission,
     User,
     UserStatus,
 )
 from app.schemas.auth import DeleteAccountRequest
 from app.schemas.internship import (
     CertificateOut,
-    EnrollRequest,
     JourneyOut,
-    LinkedInSubmissionOut,
-    LinkedInSubmitRequest,
     MarkReadRequest,
     NotificationOut,
     ProfileOut,
     ProfileUpdate,
     TaskOut,
-    TaskSubmissionOut,
 )
 from app.services.aggregate import build_journey, certificate_out
 from app.services.documents import generate_certificate, generate_offer_letter
-from app.services.storage import read_bytes
 from app.services.journey import (
     certificate_for,
-    compute_stage,
     get_active_enrollment,
-    has_reached,
 )
-from app.services.notifications import log_activity, notify
-from app.services.numbering import next_certificate_number, next_offer_letter_number
-from app.services.storage import save_screenshot
+from app.services.notifications import log_activity
+from app.services.storage import read_bytes
 
 router = APIRouter(prefix="/me", tags=["student"])
 
@@ -397,7 +379,10 @@ def delete_account(
     student.email = f"deleted+{student.id}@account.invalid"
     student.password_hash = hash_password(generate_url_token())
     student.email_verified = False
+    student.date_of_birth = None
     student.status = UserStatus.DELETED
     student.deleted_at = datetime.now(timezone.utc)
+    # Every token this account holds stops working now, not in thirty days.
+    student.token_version += 1
 
     db.commit()

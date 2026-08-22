@@ -23,7 +23,7 @@ from app.models import (
     Task,
 )
 from tests.conftest import auth_headers
-from tests.test_journey import STUDENT, admin_token, student_token  # noqa: F401
+from tests.test_journey import STUDENT, admin_token, student_token
 
 
 def make_domain(db, slug: str, title: str, tasks: int = 1):

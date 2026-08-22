@@ -28,6 +28,15 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3001"]
 
+    # --- age policy --------------------------------------------------------
+    # The DPDP Act 2023 treats anyone under 18 as a child and requires
+    # verifiable parental consent before their data may be processed. We have
+    # no consent mechanism, so the compliant position is to not hold children's
+    # data at all: registration asks for a date of birth and refuses anyone
+    # below this age. Configurable so that a consent flow, once built, can
+    # lower it without a code change.
+    MINIMUM_AGE: int = 18
+
     # --- storage (Cloudflare R2) -------------------------------------------
     R2_ACCOUNT_ID: str = ""
     R2_ACCESS_KEY_ID: str = ""

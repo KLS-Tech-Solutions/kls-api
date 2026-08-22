@@ -13,14 +13,13 @@ nothing is lost.
 import logging
 import smtplib
 import uuid
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
 
 from fastapi import BackgroundTasks
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import EmailLog, EmailStatus, EmailTemplate
@@ -221,7 +220,7 @@ def _deliver_and_log(
                     subject=subject,
                     status=EmailStatus.SENT if delivered else EmailStatus.FAILED,
                     error=error,
-                    sent_at=datetime.now() if delivered else None,
+                    sent_at=datetime.now(timezone.utc) if delivered else None,
                 )
             )
             db.commit()
@@ -250,10 +249,14 @@ def queue_email(
     html = _layout(heading=heading, body_html=body_html, cta=cta)
     text = _plain(heading=heading, body_lines=body_text, cta=cta)
 
-    payload = dict(
-        user_id=user_id, to=to, subject=subject, html=html, text=text,
-        template_name=template_name,
-    )
+    payload = {
+        "user_id": user_id,
+        "to": to,
+        "subject": subject,
+        "html": html,
+        "text": text,
+        "template_name": template_name,
+    }
 
     if background is not None:
         background.add_task(_deliver_and_log, **payload)

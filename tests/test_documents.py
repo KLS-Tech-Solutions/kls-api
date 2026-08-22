@@ -7,16 +7,21 @@ PDF on every platform.
 """
 
 import io
-
-from sqlalchemy import select
+from datetime import date
 
 from pypdf import PdfReader
+from sqlalchemy import select
 
+from app.core.dates import today_in_ist
 from app.services.documents import (
     build_qr_data_uri,
     generate_certificate,
     generate_offer_letter,
 )
+
+# Comfortably an adult, and stays that way — the alternative is a literal that
+# quietly ages into a test failure.
+ADULT_DOB = date(today_in_ist().year - 22, 6, 15).isoformat()
 
 
 def pdf_text(data: bytes) -> str:
@@ -142,6 +147,7 @@ def test_student_can_download_the_offer_letter(client, db_session):
             "email": "ananya@example.com",
             "phone": "9845012345",
             "password": "kls12345",
+            "date_of_birth": ADULT_DOB,
         },
     )
     token = client.post(
@@ -208,6 +214,7 @@ def test_offer_letter_regenerates_when_the_file_is_missing(client, db_session, t
             "email": "rohit@example.com",
             "phone": "9845012345",
             "password": "kls12345",
+            "date_of_birth": ADULT_DOB,
         },
     )
     token = client.post(
@@ -371,6 +378,7 @@ def test_history_downloads_are_scoped_to_the_caller(client, db_session):
         client.post("/api/v1/auth/register", json={
             "full_name": "Student", "email": email,
             "phone": "9845012345", "password": "kls12345",
+            "date_of_birth": ADULT_DOB,
         })
         return client.post(
             "/api/v1/auth/login", json={"email": email, "password": "kls12345"}

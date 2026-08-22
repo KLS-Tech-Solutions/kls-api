@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core import ratelimit
+from app.core.dates import today_in_ist
 from app.core.security import hash_password
 from app.models import (
     AdminProfile,
@@ -28,6 +29,10 @@ from app.models import (
     UserStatus,
 )
 from tests.conftest import auth_headers
+
+# Comfortably an adult, and stays that way — the alternative is a literal that
+# quietly ages into a test failure.
+ADULT_DOB = date(today_in_ist().year - 22, 6, 15).isoformat()
 
 PDF = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
 
@@ -85,6 +90,7 @@ def student(client):
     client.post("/api/v1/auth/register", json={
         "full_name": "Ananya Rao", "email": "ananya@example.com",
         "phone": "9845012345", "password": "kls12345",
+        "date_of_birth": ADULT_DOB,
     })
     return client.post(
         "/api/v1/auth/login",
@@ -138,6 +144,7 @@ def test_document_numbers_are_random_not_sequential(client, db_session, domain):
         client.post("/api/v1/auth/register", json={
             "full_name": f"Student {index}", "email": email,
             "phone": "9845012345", "password": "kls12345",
+            "date_of_birth": ADULT_DOB,
         })
         token = client.post(
             "/api/v1/auth/login", json={"email": email, "password": "kls12345"}
@@ -151,9 +158,7 @@ def test_document_numbers_are_random_not_sequential(client, db_session, domain):
             },
         )
 
-    numbers = [
-        n for n in db_session.scalars(select(OfferLetter.offer_letter_number))
-    ]
+    numbers = list(db_session.scalars(select(OfferLetter.offer_letter_number)))
     assert len(numbers) == 4
     assert len(set(numbers)) == 4, "numbers must be unique"
 
@@ -390,10 +395,11 @@ def test_notes_do_not_block_task_submission(
         json={"status": "approved", "remarks": "Verified."},
     )
 
-    task = [
-        t for t in client.get("/api/v1/me/tasks", headers=auth_headers(student)).json()
+    task = next(
+        t
+        for t in client.get("/api/v1/me/tasks", headers=auth_headers(student)).json()
         if t["order_number"] > 0
-    ][0]
+    )
 
     response = client.post(
         "/api/v1/task-submissions",
@@ -480,10 +486,11 @@ def test_the_certificate_is_issued_when_the_last_task_is_approved(
         json={"status": "approved", "remarks": "Verified."},
     )
 
-    task = [
-        t for t in client.get("/api/v1/me/tasks", headers=headers).json()
+    task = next(
+        t
+        for t in client.get("/api/v1/me/tasks", headers=headers).json()
         if t["order_number"] > 0
-    ][0]
+    )
     submission = client.post(
         "/api/v1/task-submissions",
         headers=headers,

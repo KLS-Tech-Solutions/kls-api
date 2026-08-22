@@ -32,14 +32,15 @@ from app.models.submission import (
 from app.models.user import AdminProfile, EmailToken, StudentProfile, User
 
 __all__ = [
+    "GUID",
     "ActivityLog",
     "AdminProfile",
     "AdminReview",
     "BatchStatus",
     "Certificate",
-    "ChapterRead",
     "CertificateStatus",
     "CertificateVerificationLog",
+    "ChapterRead",
     "Difficulty",
     "EmailLog",
     "EmailStatus",
@@ -47,7 +48,6 @@ __all__ = [
     "EmailToken",
     "Enrollment",
     "EnrollmentStatus",
-    "GUID",
     "InternshipBatch",
     "InternshipDomain",
     "JourneyStage",
@@ -64,8 +64,8 @@ __all__ = [
     "TaskScreenshot",
     "TaskSubmission",
     "TimestampMixin",
-    "User",
     "UUIDMixin",
+    "User",
     "UserRole",
     "UserStatus",
 ]

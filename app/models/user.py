@@ -1,10 +1,11 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.dates import completed_years, today_in_ist
 from app.models.base import GUID, TimestampMixin, UUIDMixin
 from app.models.enums import UserRole, UserStatus
 
@@ -28,8 +29,23 @@ class User(Base, UUIDMixin, TimestampMixin):
     )
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Set when the holder closes the account. The row survives so issued
-    # certificates keep a valid foreign key and stay publicly verifiable.
+
+    # Nullable because accounts created before this column existed have no
+    # value and there is no honest way to invent one. New registrations
+    # require it — see `RegisterRequest`.
+    date_of_birth: Mapped[date | None] = mapped_column(Date)
+
+    # Bumped to invalidate every token this account has ever been issued.
+    #
+    # Access and refresh tokens are stateless: once signed, nothing can call
+    # one back. A refresh token lives for 30 days, so without this a stolen
+    # one survives the password reset performed *because* it was stolen. The
+    # version is minted into every token and compared on every request, which
+    # turns "revoke everything" into a single integer write.
+    token_version: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     student_profile: Mapped["StudentProfile | None"] = relationship(
@@ -38,6 +54,31 @@ class User(Base, UUIDMixin, TimestampMixin):
     admin_profile: Mapped["AdminProfile | None"] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+
+    @property
+    def age(self) -> int | None:
+        """
+        Completed years, or None when the date of birth was never recorded.
+
+        Computed rather than stored: an age column is wrong from the day after
+        it is written. Judged on the Indian calendar — see `app.core.dates`.
+        """
+        if self.date_of_birth is None:
+            return None
+        return completed_years(self.date_of_birth, today_in_ist())
+
+    @property
+    def is_minor(self) -> bool:
+        """
+        Under 18, which is what the DPDP Act calls a child.
+
+        Unknown ages return False. That is deliberate: this flag exists to
+        trigger extra protection, and the accounts with no date of birth are
+        pre-existing ones we have no basis to treat as children. Anyone
+        registering now must supply a date, so the unknown set only shrinks.
+        """
+        age = self.age
+        return age is not None and age < 18
 
     @property
     def is_admin(self) -> bool:

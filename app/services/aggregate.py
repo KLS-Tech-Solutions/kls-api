@@ -5,14 +5,11 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.config import settings
 from app.models import (
     Certificate,
-    CertificateStatus,
     InternshipBatch,
     InternshipDomain,
     JourneyStage,
-    LinkedInSubmission,
     Notification,
     OfferLetter,
     StudentProfile,
@@ -21,6 +18,7 @@ from app.models import (
     TaskSubmission,
     User,
 )
+from app.schemas.auth import UserOut
 from app.schemas.internship import (
     BatchOut,
     CertificateOut,
@@ -35,7 +33,6 @@ from app.schemas.internship import (
     TaskOut,
     TaskSubmissionOut,
 )
-from app.schemas.auth import UserOut
 from app.services.journey import (
     certificate_for,
     compute_stage,

@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 
-from app.models import Certificate, CertificateStatus, Difficulty, InternshipDomain, User, UserRole
 from app.core.security import hash_password
+from app.models import Certificate, CertificateStatus, Difficulty, InternshipDomain, User, UserRole
 
 
 def test_domain_listing_and_detail(client, db_session):

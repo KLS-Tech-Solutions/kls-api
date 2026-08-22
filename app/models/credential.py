@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -7,8 +7,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 from app.models.base import GUID, TimestampMixin, UUIDMixin
 from app.models.enums import CertificateStatus
-
-
 
 
 class Certificate(Base, UUIDMixin, TimestampMixin):
@@ -36,7 +34,7 @@ class Certificate(Base, UUIDMixin, TimestampMixin):
     )
     revoked_reason: Mapped[str | None] = mapped_column(Text)
     issued_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
 
@@ -53,5 +51,5 @@ class CertificateVerificationLog(Base, UUIDMixin):
     ip_address: Mapped[str | None] = mapped_column(String(45))
     user_agent: Mapped[str | None] = mapped_column(String(255))
     verified_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )

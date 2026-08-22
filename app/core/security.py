@@ -5,7 +5,11 @@ from typing import Any, Literal
 
 import jwt
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError, VerificationError
+from argon2.exceptions import (
+    InvalidHashError,
+    VerificationError,
+    VerifyMismatchError,
+)
 
 from app.core.config import settings
 
@@ -19,9 +23,17 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
+    """
+    False for a wrong password *and* for a malformed stored hash.
+
+    `InvalidHashError` matters: a scrubbed or corrupt row must produce a failed
+    login rather than a 500. Anything outside these three is a real fault in
+    the hasher and is left to propagate — swallowing it would turn a broken
+    argon2 install into "everybody's password is wrong".
+    """
     try:
         return _hasher.verify(password_hash, password)
-    except (VerifyMismatchError, VerificationError, Exception):
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
         return False
 
 
@@ -40,18 +52,21 @@ def _create_token(
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
-def create_access_token(user_id: uuid.UUID, role: str) -> str:
+def create_access_token(user_id: uuid.UUID, role: str, token_version: int = 0) -> str:
     return _create_token(
         str(user_id),
         "access",
         timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-        {"role": role},
+        {"role": role, "tv": token_version},
     )
 
 
-def create_refresh_token(user_id: uuid.UUID) -> str:
+def create_refresh_token(user_id: uuid.UUID, token_version: int = 0) -> str:
     return _create_token(
-        str(user_id), "refresh", timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        str(user_id),
+        "refresh",
+        timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        {"tv": token_version},
     )
 
 
@@ -71,6 +86,19 @@ def decode_token(token: str, expected_type: TokenType) -> dict[str, Any]:
         raise TokenError(f"Expected a {expected_type} token")
 
     return payload
+
+
+def token_is_current(payload: dict[str, Any], token_version: int) -> bool:
+    """
+    Whether a decoded token predates the account's last revocation.
+
+    A token issued before this column existed carries no `tv` claim. Those are
+    treated as version 0, which is what every existing row holds, so nobody is
+    signed out by the deployment that introduces this. The moment an account
+    revokes anything its version becomes 1 and the old claim-less tokens stop
+    matching — which is exactly the behaviour wanted.
+    """
+    return int(payload.get("tv", 0)) == token_version
 
 
 def generate_url_token() -> str:

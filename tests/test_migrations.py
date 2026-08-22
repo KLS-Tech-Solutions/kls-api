@@ -15,15 +15,16 @@ These tests run against a migrated database rather than a generated one.
 
 import os
 import tempfile
-from contextlib import contextmanager
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import sessionmaker
+
+from alembic import command
 
 
 @contextmanager
@@ -69,8 +70,8 @@ def migrated_engine():
 
 
 def test_the_migrated_schema_has_the_tables_the_models_declare(migrated_engine):
+    import app.models
     from app.core.database import Base
-    import app.models  # noqa: F401 — registers every model on Base
 
     migrated = set(inspect(migrated_engine).get_table_names()) - {"alembic_version"}
     declared = set(Base.metadata.tables)
@@ -91,8 +92,8 @@ def test_every_migrated_column_matches_the_model(migrated_engine):
     forgets a column the model added, which otherwise surfaces as a 500 on
     whichever endpoint touches it first.
     """
+    import app.models
     from app.core.database import Base
-    import app.models  # noqa: F401
 
     inspector = inspect(migrated_engine)
     problems: list[str] = []
@@ -126,8 +127,8 @@ def test_columns_the_database_must_fill_actually_have_a_default(migrated_engine)
     — checking every timestamp indiscriminately flags three tables that are
     perfectly correct.
     """
+    import app.models
     from app.core.database import Base
-    import app.models  # noqa: F401
 
     inspector = inspect(migrated_engine)
     missing: list[str] = []

@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 from app.api.v1 import api_router
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 logging.basicConfig(level=logging.INFO if settings.DEBUG else logging.WARNING)
 
 _problems = settings.validate_for_runtime()
@@ -18,7 +20,7 @@ if _problems:
     if settings.is_production:
         # Refuse to serve traffic with a guessable signing key.
         raise RuntimeError(message)
-    logging.warning(message)
+    logger.warning(message)
 
 
 def check_database_connection() -> None:
@@ -34,9 +36,9 @@ def check_database_connection() -> None:
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
-        logging.info("Database connection OK")
+        logger.info("Database connection OK")
     except Exception as exc:  # noqa: BLE001
-        logging.error(
+        logger.error(
             "\n"
             "=========================================================\n"
             " Cannot connect to the database.\n"

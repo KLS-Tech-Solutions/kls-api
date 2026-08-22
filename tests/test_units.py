@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 
-from app.core.ratelimit import Rule, RateLimiter
+from app.core.ratelimit import RateLimiter, Rule
 from app.core.security import (
     create_access_token,
     create_refresh_token,

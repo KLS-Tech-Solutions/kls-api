@@ -10,6 +10,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from app.core.dates import today_in_ist
 from app.core.security import hash_password
 from app.models import (
     AdminProfile,
@@ -26,11 +27,19 @@ from app.models import (
 )
 from tests.conftest import auth_headers
 
+# Comfortably an adult, and stays that way — the alternative is a literal that
+# quietly ages into a test failure.
+ADULT_DOB = date(today_in_ist().year - 22, 6, 15).isoformat()
+
 STUDENT = {
     "full_name": "Ananya Rao",
     "email": "ananya@example.com",
     "phone": "9845012345",
     "password": "kls12345",
+    # Registration requires a date of birth and refuses under-18s. A fixed
+    # date would start failing the day it drifts under the minimum, so this
+    # is anchored to the clock rather than written out.
+    "date_of_birth": ADULT_DOB,
 }
 
 

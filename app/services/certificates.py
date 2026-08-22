@@ -105,7 +105,7 @@ def issue_certificate(
             domain_title=domain.title if domain else "KLS Academy Internship",
             duration=domain.duration if domain else "",
         )
-    except Exception:  # noqa: BLE001 — never lose the record over a render error
+    except Exception:
         logger.exception(
             "Certificate PDF failed for %s; the record stands and it will "
             "regenerate on download",

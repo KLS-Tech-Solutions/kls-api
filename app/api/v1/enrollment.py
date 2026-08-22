@@ -12,9 +12,8 @@ from fastapi import (
     status,
 )
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_student
 from app.models import (
@@ -40,6 +39,8 @@ from app.schemas.internship import (
     TaskSubmissionOut,
 )
 from app.services.aggregate import submission_out
+from app.services.documents import generate_offer_letter
+from app.services.email import send_offer_letter_ready
 from app.services.journey import (
     certificate_for,
     compute_stage,
@@ -48,8 +49,6 @@ from app.services.journey import (
     linkedin_for,
 )
 from app.services.notifications import log_activity, notify
-from app.services.documents import generate_offer_letter
-from app.services.email import send_offer_letter_ready
 from app.services.numbering import next_offer_letter_number
 from app.services.storage import StorageError, save_screenshot
 

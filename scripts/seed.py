@@ -24,8 +24,11 @@ from app.models import (
     UserStatus,
 )
 
-# Bodies are placeholders until the email sprint; the rows exist so template
-# lookups have something to resolve against.
+# The subject and body here are *not* what students receive. Every workflow
+# email is composed in `app/services/email.py`, which owns the layout and the
+# copy. These rows exist so `email_logs.template_id` has something to point at,
+# which is what makes "how many task-approved emails failed last week" a query
+# rather than a guess. Editing the text below changes nothing a student sees.
 EMAIL_TEMPLATES = [
     ("welcome", "Welcome to KLS Academy", "Your account is ready."),
     ("offer_letter", "Your KLS Academy offer letter", "Your offer letter is ready to download."),

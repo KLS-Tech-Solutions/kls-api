@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import TokenError, decode_token
+from app.core.security import TokenError, decode_token, token_is_current
 from app.models import User, UserRole, UserStatus
 
 CREDENTIALS_EXCEPTION = HTTPException(
@@ -44,6 +44,15 @@ def get_current_user(
     user = db.get(User, user_id)
     if user is None:
         raise CREDENTIALS_EXCEPTION
+
+    # Checked before the status checks so a revoked token gets the generic
+    # "session ended" answer rather than confirming the account's state.
+    if not token_is_current(payload, user.token_version):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This session has ended. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     if user.status == UserStatus.DELETED:
         raise HTTPException(

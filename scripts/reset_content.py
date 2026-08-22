@@ -17,7 +17,6 @@ from app.models import (
     ActivityLog,
     AdminReview,
     Certificate,
-    ChapterRead,
     CertificateVerificationLog,
     EmailLog,
     EmailToken,

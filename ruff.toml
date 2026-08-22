@@ -1,0 +1,91 @@
+# Lint configuration.
+#
+# The rule set is deliberately wider than the default, because a public
+# repository is read by people who did not write it and inconsistency costs
+# them more than it costs us. What follows is the reasoning for every rule
+# switched off — a bare ignore list with no explanation is how a lint config
+# becomes something nobody dares change.
+
+target-version = "py312"
+line-length = 100
+
+exclude = [
+    ".venv",
+    "alembic/versions",  # generated files; Alembic's formatting, not ours
+    "media",
+]
+
+[lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes — the ones that catch real mistakes
+    "I",    # import sorting
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "DTZ",  # naive datetimes — see below, this one found a real bug
+    "LOG",  # logging misuse
+    "RUF",  # ruff's own
+    "C4",   # comprehensions
+    "ISC",  # implicit string concatenation
+    "BLE",  # blind except
+]
+
+ignore = [
+    # FastAPI's entire dependency-injection model is a function call in a
+    # default argument: `db: Session = Depends(get_db)`. B008 flags 123 of
+    # these, every one of them correct and idiomatic. Turning it off is not a
+    # concession — the rule simply does not apply to this framework.
+    "B008",
+
+    # Implicit string concatenation inside a collection. Used throughout for
+    # long email bodies and multi-line messages, where the alternative is
+    # worse to read.
+    "ISC001",
+    "ISC003",
+
+    # E501 line length is handled by the formatter, and a long URL in a
+    # docstring is not worth a warning.
+    "E501",
+
+    # UP017 rewrites `timezone.utc` to `datetime.UTC`, which exists only on
+    # Python 3.11+. Docker and CI run 3.12, but a lint autofix should not be
+    # the thing that decides the project's minimum Python — and it silently
+    # broke every import the first time it ran. `timezone.utc` works
+    # everywhere and reads no worse.
+    "UP017",
+
+    # ISC004 objects to implicit string concatenation inside a list. Used for
+    # long email bodies and multi-line PDF copy, where the alternative — one
+    # unbroken line, or explicit `+` — reads worse than the thing being
+    # warned about.
+    "ISC004",
+]
+
+[lint.per-file-ignores]
+# Tests import fixtures they never call directly — that is how pytest works —
+# and redefine names from other test modules on purpose.
+#
+# DTZ011 is `date.today()`, used to build batch start and end dates. A naive
+# date is exactly right there: a batch runs from a calendar day, not from an
+# instant, and forcing a timezone onto it would be the wrong fix.
+"tests/*" = ["F401", "F811", "ARG001", "DTZ011", "DTZ005"]
+
+# `enums.py` defines its own StrEnum shim so the project still runs on Python
+# 3.10. UP042 wants `enum.StrEnum`, which is 3.11+ — exactly what the shim
+# exists to avoid.
+"app/models/enums.py" = ["UP042"]
+
+# Pydantic deep-copies mutable defaults per instance, so `outcomes: list[str] = []`
+# on a model is safe. RUF012 is about plain classes, where it would be a real
+# bug.
+"app/schemas/*" = ["RUF012"]
+
+# Standalone scripts adjust sys.path before importing the app, which is what
+# makes them runnable as `python scripts/x.py`. E402 and one-line lambdas are
+# the price of that and are contained to this directory.
+"scripts/*" = ["T201", "E402", "E731", "E702"]
+
+# The package __init__ re-exports every model so Alembic's autogenerate and
+# `Base.metadata` see them. They are unused *here* by design.
+"app/models/__init__.py" = ["F401"]
+"app/schemas/__init__.py" = ["F401", "F403"]

@@ -14,4 +14,4 @@ class Message(BaseModel):
     detail: str
 
 
-__all__ = ["ORMModel", "Message", "uuid", "datetime", "date"]
+__all__ = ["Message", "ORMModel", "date", "datetime", "uuid"]

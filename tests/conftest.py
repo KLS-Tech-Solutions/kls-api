@@ -14,14 +14,14 @@ os.environ["R2_ACCESS_KEY_ID"] = ""
 os.environ["R2_SECRET_ACCESS_KEY"] = ""
 os.environ["ENVIRONMENT"] = "test"
 
-from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import create_engine  # noqa: E402
-from sqlalchemy.orm import sessionmaker  # noqa: E402
-from sqlalchemy.pool import StaticPool  # noqa: E402
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-import app.models  # noqa: E402,F401  — must precede the aliased import below
-from app.core.database import Base, get_db  # noqa: E402
-from app.main import app as fastapi_app  # noqa: E402
+import app.models
+from app.core.database import Base, get_db
+from app.main import app as fastapi_app
 
 # Aliased: `import app.models` binds the name `app` to the package, which would
 # otherwise shadow the FastAPI instance.

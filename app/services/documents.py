@@ -23,7 +23,7 @@ stale file can always be regenerated from the database record.
 import base64
 import io
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from reportlab.lib import colors
@@ -700,7 +700,7 @@ def generate_offer_letter(
         duration=duration,
         batch_name=batch_name,
         task_count=task_count,
-        issued_on=issued_on or datetime.now(),
+        issued_on=issued_on or datetime.now(timezone.utc),
         starts_on=starts_on,
     )
     key = f"offer-letters/{offer_number.replace('/', '-')}.pdf"
@@ -720,7 +720,7 @@ def generate_certificate(
         student_name=student_name,
         domain_title=domain_title,
         duration=duration,
-        issued_on=issued_on or datetime.now(),
+        issued_on=issued_on or datetime.now(timezone.utc),
         verify_url=verify_url,
         qr_png=qr,
     )

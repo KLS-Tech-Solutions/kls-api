@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -23,7 +23,7 @@ class OfferLetter(Base, UUIDMixin, TimestampMixin):
     )
     pdf_url: Mapped[str | None] = mapped_column(String(500))
     generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     linkedin_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
 
@@ -50,7 +50,7 @@ class LinkedInSubmission(Base, UUIDMixin, TimestampMixin):
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     submitted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
 
@@ -119,7 +119,7 @@ class AdminReview(Base, UUIDMixin, TimestampMixin):
         Enum(ReviewStatus, name="review_status", native_enum=False), nullable=False
     )
     reviewed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     submission: Mapped[TaskSubmission] = relationship(back_populates="reviews")

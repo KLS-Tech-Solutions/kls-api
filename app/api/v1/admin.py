@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -9,7 +9,6 @@ from app.core.database import get_db
 from app.core.deps import get_current_admin, get_current_super_admin
 from app.models import (
     ActivityLog,
-    JourneyStage,
     AdminReview,
     Certificate,
     CertificateStatus,
@@ -26,6 +25,7 @@ from app.models import (
     User,
     UserRole,
 )
+from app.schemas.auth import UserOut
 from app.schemas.internship import (
     BatchCreate,
     BatchOut,
@@ -44,7 +44,6 @@ from app.schemas.internship import (
     TaskSubmissionOut,
     TaskUpdate,
 )
-from app.schemas.auth import UserOut
 from app.services.aggregate import (
     batch_out,
     build_journey,
@@ -53,12 +52,12 @@ from app.services.aggregate import (
     submission_out,
 )
 from app.services.certificates import issue_if_complete
-from app.services.journey import compute_stage, get_active_enrollment
 from app.services.email import (
     send_certificate_issued,
     send_linkedin_reviewed,
     send_task_reviewed,
 )
+from app.services.journey import compute_stage, get_active_enrollment
 from app.services.notifications import log_activity, notify
 
 router = APIRouter(prefix="/admin", tags=["admin"])

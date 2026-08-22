@@ -10,4 +10,4 @@ from app.schemas.auth import (
     VerifyEmailRequest,
 )
 from app.schemas.common import Message, ORMModel
-from app.schemas.internship import *  # noqa: F403
+from app.schemas.internship import *

@@ -8,15 +8,15 @@ and asserts that every admin action is reflected on the student side:
 
 Uses its own SQLite file so it never touches your development data.
 """
-import io, os
+import io
+import os
+
 os.environ.update(DATABASE_URL="sqlite:////tmp/e2e2.db", SECRET_KEY="integration-secret-key-long-enough-here", DEBUG="false")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-import app.models
-from app.core.database import Base
+
+from app.core.database import Base, engine
 from app.main import app as fastapi_app
-from app.core.database import engine
 
 Base.metadata.create_all(engine)
 

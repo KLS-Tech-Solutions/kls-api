@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.ratelimit import EMAIL_SEND, LOGIN, REGISTER, clear, enforce
 from app.core.deps import get_current_user
+from app.core.ratelimit import EMAIL_SEND, LOGIN, REGISTER, clear, enforce
 from app.core.security import (
     TokenError,
     create_access_token,
@@ -15,6 +15,7 @@ from app.core.security import (
     decode_token,
     generate_url_token,
     hash_password,
+    token_is_current,
     verify_password,
 )
 from app.models import (
@@ -28,6 +29,7 @@ from app.models import (
 from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
+    LogoutRequest,
     RefreshRequest,
     RefreshResponse,
     RegisterRequest,
@@ -75,6 +77,7 @@ def register(
         email=payload.email.lower(),
         phone=payload.phone,
         password_hash=hash_password(payload.password),
+        date_of_birth=payload.date_of_birth,
         role=UserRole.STUDENT,
         status=UserStatus.PENDING,
         email_verified=False,
@@ -155,8 +158,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     db.commit()
 
     return TokenPair(
-        access_token=create_access_token(user.id, user.role.value),
-        refresh_token=create_refresh_token(user.id),
+        access_token=create_access_token(user.id, user.role.value, user.token_version),
+        refresh_token=create_refresh_token(user.id, user.token_version),
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=UserOut.model_validate(user),
     )
@@ -173,23 +176,53 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
 
     import uuid as _uuid
 
-    user = db.get(User, _uuid.UUID(claims["sub"]))
+    try:
+        user_id = _uuid.UUID(claims["sub"])
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is no longer valid"
+        ) from exc
+
+    user = db.get(User, user_id)
     if user is None or user.status in (UserStatus.SUSPENDED, UserStatus.DELETED):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is no longer valid"
         )
 
+    # The refresh path is the one that matters. An access token expires in
+    # half an hour on its own; a refresh token is good for thirty days and is
+    # what turns a single theft into a month of access.
+    if not token_is_current(claims, user.token_version):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is no longer valid"
+        )
+
     return RefreshResponse(
-        access_token=create_access_token(user.id, user.role.value),
-        refresh_token=create_refresh_token(user.id),
+        access_token=create_access_token(user.id, user.role.value, user.token_version),
+        refresh_token=create_refresh_token(user.id, user.token_version),
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Tokens are stateless; the client clears its cookies. Logged for audit.
-    log_activity(db, user.id, "Signed out", "auth", str(user.id))
+def logout(
+    payload: LogoutRequest | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Ordinary sign-out clears the cookies on this device and nothing else.
+
+    `all_devices` revokes every token the account holds, which is the button
+    you want after leaving yourself signed in on a college lab machine. It is
+    not the default: someone signing out of their laptop does not expect to be
+    thrown out of the app on their phone at the same time.
+    """
+    if payload is not None and payload.all_devices:
+        user.token_version += 1
+        log_activity(db, user.id, "Signed out of all devices", "auth", str(user.id))
+    else:
+        log_activity(db, user.id, "Signed out", "auth", str(user.id))
     db.commit()
 
 
@@ -285,6 +318,11 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
     user = db.get(User, token.user_id)
     if user is not None:
         user.password_hash = hash_password(payload.password)
+        # The reason most people reset a password is that they think someone
+        # else has it. Changing the password alone would leave the intruder's
+        # 30-day refresh token working, which makes the reset theatre.
+        user.token_version += 1
+        log_activity(db, user.id, "Password reset; all sessions ended", "auth", str(user.id))
     db.commit()
 
 
