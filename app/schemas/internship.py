@@ -280,6 +280,8 @@ class ProfileOut(ORMModel):
 class ProfileUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=100)
     phone: str | None = None
+    state: str | None = Field(default=None, max_length=80)
+    country: str | None = Field(default=None, max_length=80)
     college_name: str | None = Field(default=None, max_length=150)
     degree: str | None = Field(default=None, max_length=60)
     branch: str | None = Field(default=None, max_length=80)

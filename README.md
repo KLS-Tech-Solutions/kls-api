@@ -15,17 +15,20 @@ database serve both frontends** — `academy.klstechsolutions.in` (students) and
 
 ## Run it
 
-You need **Docker Desktop**. Nothing else — Postgres comes up in the compose stack.
+You need **Python 3.12** and a **PostgreSQL 17** server. Nothing is containerised —
+the API runs directly, in a virtual environment.
 
 ```bash
-cp .env.example .env          # then set SECRET_KEY
-docker compose up             # Postgres + API, migrations run automatically
-docker compose exec api python scripts/seed.py
+python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env         # set DATABASE_URL, SECRET_KEY, superadmin credentials
+alembic upgrade head         # creates every table
+python scripts/seed.py       # first super admin + email template rows
+uvicorn app.main:app --reload
 ```
 
 - API — http://localhost:8000
 - Interactive docs — http://localhost:8000/docs
-- Postgres — `localhost:5432`, user `kls`, password `kls_dev_password`
 
 Generate a real secret before anything leaves your laptop:
 
@@ -33,18 +36,8 @@ Generate a real secret before anything leaves your laptop:
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-### Without Docker
-
 Full step-by-step for Windows + local Postgres + pgAdmin: **`docs/LOCAL_SETUP.md`**.
-
-```bash
-python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env         # set DATABASE_URL, SECRET_KEY, superadmin credentials
-alembic upgrade head         # creates all 20 tables
-python scripts/seed.py
-uvicorn app.main:app --reload
-```
+Deploying to a server: **`docs/DEPLOYMENT.md`**.
 
 **Never create the tables by hand.** `alembic upgrade head` builds them to match the
 models exactly and records the version so later changes are incremental.

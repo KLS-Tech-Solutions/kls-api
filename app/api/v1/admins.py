@@ -82,7 +82,8 @@ def invite_admin(
         admin = User(
             full_name=payload.full_name.strip(),
             email=email,
-            phone="",
+            # Admins are invited by email and never phoned.
+            phone=None,
             # Unusable placeholder — replaced when the invite is accepted.
             password_hash=hash_password(generate_url_token()),
             role=payload.role,

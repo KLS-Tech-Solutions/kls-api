@@ -3,10 +3,16 @@
 Everything needed to take KLS Academy from a bare VPS to a running production
 system, and to keep it running.
 
+**Nothing here is containerised.** The API runs as a systemd service in a
+virtual environment, both frontends run as systemd services from a Next.js
+standalone build, and Postgres is installed from the distribution's packages.
+That is a deliberate choice for a platform this size: one machine, three
+services, no orchestration layer to learn or debug at 2am.
+
 This is written to be followed literally, by whoever is holding the pager —
-including you at 2am, including somebody who has never seen this codebase.
-Where a step has a reason that is not obvious, the reason is given, because a
-runbook whose steps look arbitrary is a runbook people start skipping.
+including you months from now, including somebody who has never seen this
+codebase. Where a step has a reason that is not obvious, the reason is given,
+because a runbook whose steps look arbitrary is a runbook people start skipping.
 
 **Read section 0 before buying anything.**
 
@@ -16,22 +22,21 @@ runbook whose steps look arbitrary is a runbook people start skipping.
 
 Three pieces, three names:
 
-| Piece | Repository | Public name |
-|---|---|---|
-| Student portal | `KLS-academy` | `academy.klstechsolutions.in` |
-| Admin console | `KLS-admin-dashboard` | `admin.klstechsolutions.in` |
-| API | `kls-api` | `api.klstechsolutions.in` |
+| Piece | Repository | Runs on | Public name |
+|---|---|---|---|
+| Student portal | `KLS-academy` | port 3000 | `academy.klstechsolutions.in` |
+| Admin console | `KLS-admin-dashboard` | port 3001 | `admin.klstechsolutions.in` |
+| API | `kls-api` | port 8000 | `api.klstechsolutions.in` |
 
 Plus PostgreSQL 17, and Cloudflare R2 for uploaded files.
 
 ### The machine
 
-A 4 GB / 2 vCPU VPS is comfortable for this. 2 GB works but leaves no headroom
-during a Docker build — if you take the 2 GB option, build images somewhere
-else and pull them, rather than building on the server.
+A 4 GB / 2 vCPU VPS is comfortable. 2 GB works for running the services but is
+tight for `npm run build`, which is the memory-hungry step — if you take 2 GB,
+add swap before your first build (§1).
 
-Ubuntu 24.04 LTS. Any distribution works; this runbook's commands assume that
-one.
+Ubuntu 24.04 LTS. Any distribution works; the commands assume that one.
 
 ### Things to get before you start
 
@@ -66,8 +71,7 @@ systemctl restart ssh
 
 **Before you close this session, open a second terminal and confirm you can
 still get in as `kls`.** If you cannot, you still have the first session to fix
-it with. Once both sessions are closed, a broken SSH config means a support
-ticket.
+it with. Once both are closed, a broken SSH config means a support ticket.
 
 Firewall:
 
@@ -78,9 +82,8 @@ ufw allow 443
 ufw enable
 ```
 
-Nothing else is exposed. In particular Postgres (5432) and the app ports (8000,
-3000, 3001) stay closed — they are reachable only from inside the Docker
-network and from `localhost`.
+Nothing else is exposed. Postgres (5432) and the three app ports are bound to
+localhost and reachable only from the machine itself.
 
 Automatic security updates:
 
@@ -89,27 +92,39 @@ sudo apt update && sudo apt install -y unattended-upgrades
 sudo dpkg-reconfigure --priority=low unattended-upgrades
 ```
 
-### Docker
+Swap, if you are on 2 GB. A Next.js build will be OOM-killed without it, and
+the error it produces does not mention memory:
 
 ```bash
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker kls
-newgrp docker
-docker --version && docker compose version
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+### Runtimes
+
+```bash
+sudo apt install -y python3.12 python3.12-venv python3-pip \
+                    postgresql postgresql-contrib libpq-dev build-essential git
+
+# Node 22, from NodeSource — the distribution's Node is too old for Next 16.
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
+
+python3.12 --version && node --version && psql --version
 ```
 
 ---
 
 ## 2. DNS
 
-Four A records, all pointing at the VPS IP:
+Three A records, all pointing at the VPS IP:
 
 | Name | Type | Value |
 |---|---|---|
 | `academy` | A | your IP |
 | `admin` | A | your IP |
 | `api` | A | your IP |
-| `www` | A | your IP (if you want it) |
 
 If you use Cloudflare, set these to **DNS only** (grey cloud) until TLS is
 issued in §5. Proxying before the certificate exists makes Let's Encrypt's
@@ -124,7 +139,29 @@ dig +short api.klstechsolutions.in
 
 ---
 
-## 3. Get the code onto the server
+## 3. Database
+
+```bash
+sudo -u postgres psql
+```
+
+```sql
+CREATE USER kls WITH PASSWORD 'PASTE_DB_PASSWORD_HERE';
+CREATE DATABASE kls_academy OWNER kls;
+\q
+```
+
+Confirm it only listens locally — the default, but worth checking, because a
+Postgres open to the internet is found by scanners within hours:
+
+```bash
+sudo grep -E "^listen_addresses" /etc/postgresql/*/main/postgresql.conf
+# listen_addresses = 'localhost'   (or absent, which means the same)
+```
+
+---
+
+## 4. Code and configuration
 
 ```bash
 sudo mkdir -p /srv/kls && sudo chown kls:kls /srv/kls
@@ -133,10 +170,6 @@ git clone <your-remote>/kls-api.git
 git clone <your-remote>/KLS-academy.git
 git clone <your-remote>/KLS-admin-dashboard.git
 ```
-
----
-
-## 4. Configuration
 
 ### Generate the secrets
 
@@ -158,7 +191,7 @@ Start from `.env.example` and set:
 ENVIRONMENT=production
 DEBUG=false
 
-DATABASE_URL=postgresql+psycopg://kls:<DB_PASSWORD>@db:5432/kls_academy
+DATABASE_URL=postgresql+psycopg://kls:<DB_PASSWORD>@localhost:5432/kls_academy
 SECRET_KEY=<SECRET_KEY>
 
 # HTTPS only. The app refuses to start with a plain-http origin in production.
@@ -190,12 +223,11 @@ chmod 600 /srv/kls/kls-api/.env
 
 `app/core/config.py` refuses to start on a placeholder `SECRET_KEY`, on
 `DEBUG=true` in production, on a plain-http CORS origin, and on a missing
-super-admin password. If the container exits immediately after start, read the
-first ten lines of its log — the reason will be there in plain English.
+super-admin password. If the service fails immediately after start, read the
+first ten lines of `journalctl -u kls-api` — the reason will be there in plain
+English.
 
 ### Frontend environment
-
-Both frontends need `API_BASE_URL` pointing at the API, server-side only:
 
 ```ini
 # /srv/kls/KLS-academy/.env.production
@@ -203,13 +235,119 @@ API_BASE_URL=https://api.klstechsolutions.in/api/v1
 NEXT_PUBLIC_MIXPANEL_TOKEN=      # optional; empty disables analytics entirely
 ```
 
+```ini
+# /srv/kls/KLS-admin-dashboard/.env.production
+API_BASE_URL=https://api.klstechsolutions.in/api/v1
+```
+
 The JWT never reaches client JavaScript — the browser talks to the Next route
 handlers, which hold httpOnly cookies and proxy to the API. `API_BASE_URL` is
 therefore deliberately not `NEXT_PUBLIC_`.
 
+### Install and build
+
+```bash
+# API
+cd /srv/kls/kls-api
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/alembic upgrade head
+.venv/bin/python scripts/seed.py        # first super admin + email template rows
+
+# Frontends
+cd /srv/kls/KLS-academy         && npm ci && npm run build
+cd /srv/kls/KLS-admin-dashboard && npm ci && npm run build
+```
+
+Both frontends are configured with Next's `output: "standalone"`, which emits a
+self-contained server at `.next/standalone/server.js`. The systemd units below
+run that, not `next start`.
+
 ---
 
-## 5. Reverse proxy and TLS
+## 5. systemd services
+
+Three units. Each restarts on failure and starts at boot.
+
+`/etc/systemd/system/kls-api.service`:
+
+```ini
+[Unit]
+Description=KLS Academy API
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=kls
+WorkingDirectory=/srv/kls/kls-api
+EnvironmentFile=/srv/kls/kls-api/.env
+# Bound to localhost. Caddy is the only thing that should reach this.
+ExecStart=/srv/kls/kls-api/.venv/bin/uvicorn app.main:app \
+          --host 127.0.0.1 --port 8000 --workers 2
+Restart=always
+RestartSec=5
+
+# The service needs to write nothing outside its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/kls/kls-api/media
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/systemd/system/kls-academy.service`:
+
+```ini
+[Unit]
+Description=KLS Academy student portal
+After=network.target
+
+[Service]
+Type=simple
+User=kls
+WorkingDirectory=/srv/kls/KLS-academy/.next/standalone
+EnvironmentFile=/srv/kls/KLS-academy/.env.production
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/systemd/system/kls-admin.service` is identical except for the
+description, `WorkingDirectory`, `EnvironmentFile`, and `PORT=3001`.
+
+The standalone server needs the static assets and `public/` beside it, which
+the build does not copy:
+
+```bash
+for app in KLS-academy KLS-admin-dashboard; do
+  cp -r /srv/kls/$app/.next/static /srv/kls/$app/.next/standalone/.next/
+  cp -r /srv/kls/$app/public       /srv/kls/$app/.next/standalone/
+done
+```
+
+Forgetting this is the classic standalone mistake: the site loads but every
+stylesheet and image 404s, so it renders as unstyled HTML.
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now kls-api kls-academy kls-admin
+sudo systemctl status kls-api kls-academy kls-admin --no-pager
+```
+
+---
+
+## 6. Reverse proxy and TLS
 
 Caddy, because it obtains and renews certificates by itself and its config for
 this is nine lines. Nginx plus certbot is equally fine if you already know it.
@@ -227,15 +365,15 @@ sudo apt update && sudo apt install -y caddy
 
 ```
 api.klstechsolutions.in {
-	reverse_proxy localhost:8000
+	reverse_proxy 127.0.0.1:8000
 }
 
 academy.klstechsolutions.in {
-	reverse_proxy localhost:3000
+	reverse_proxy 127.0.0.1:3000
 }
 
 admin.klstechsolutions.in {
-	reverse_proxy localhost:3001
+	reverse_proxy 127.0.0.1:3001
 }
 ```
 
@@ -247,100 +385,14 @@ Certificates are issued on first request to each name and renewed
 automatically. If issuance fails, `journalctl -u caddy -n 50` says why; it is
 almost always DNS not yet propagated, or a proxy in front.
 
-Once TLS is working, turn Cloudflare's orange cloud back on if you want it, and
-set SSL mode to **Full (strict)**.
-
----
-
-## 6. Bring it up
-
-The compose file in the repository is the development one — it mounts source
-directories and runs uvicorn with `--reload`. Create a production override
-beside it:
-
-`/srv/kls/docker-compose.prod.yml`
-
-```yaml
-services:
-  db:
-    image: postgres:17-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: kls
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: kls_academy
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    # No ports section. Postgres is reachable only from this network.
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kls -d kls_academy"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  api:
-    build: ./kls-api
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file: ./kls-api/.env
-    # Bound to localhost, so only Caddy can reach it.
-    ports: ["127.0.0.1:8000:8000"]
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
-
-  academy:
-    build: ./KLS-academy
-    restart: unless-stopped
-    env_file: ./KLS-academy/.env.production
-    ports: ["127.0.0.1:3000:3000"]
-    depends_on: [api]
-
-  admin:
-    build: ./KLS-admin-dashboard
-    restart: unless-stopped
-    env_file: ./KLS-admin-dashboard/.env.production
-    environment:
-      PORT: 3001
-    ports: ["127.0.0.1:3001:3001"]
-    depends_on: [api]
-
-volumes:
-  postgres_data:
-```
-
-```bash
-cd /srv/kls
-echo "DB_PASSWORD=<DB_PASSWORD>" > .env && chmod 600 .env
-docker compose -f docker-compose.prod.yml up -d --build
-docker compose -f docker-compose.prod.yml ps
-```
-
-Migrations run as part of the API's start command, so `alembic upgrade head`
-happens automatically on every deploy. To run it by hand:
-
-```bash
-docker compose -f docker-compose.prod.yml exec api alembic upgrade head
-docker compose -f docker-compose.prod.yml exec api alembic current
-```
-
-### Create the first super admin
-
-```bash
-docker compose -f docker-compose.prod.yml exec api python scripts/seed.py
-```
-
-This reads `FIRST_SUPERADMIN_EMAIL` and `FIRST_SUPERADMIN_PASSWORD` from the
-environment. Sign in at `admin.klstechsolutions.in` and **change the password
-immediately**, then do §9 before you do anything else.
+Once TLS works, turn Cloudflare's orange cloud back on if you want it, and set
+SSL mode to **Full (strict)**.
 
 ---
 
 ## 7. Verify the deployment
 
-Do all of these. Each one has failed at least once in a way the others did not
+Do all of these. Each has failed at least once in a way the others did not
 catch.
 
 ```bash
@@ -355,6 +407,10 @@ done
 
 # Security headers are present
 curl -sI https://api.klstechsolutions.in/health | grep -iE 'x-frame|nosniff|strict-transport'
+
+# Nothing is listening publicly that should not be
+sudo ss -tlnp | grep -vE '127\.0\.0\.1|::1'
+# Expect only sshd, and caddy on 80/443.
 ```
 
 Then, in a browser:
@@ -364,16 +420,18 @@ Then, in a browser:
 - [ ] The link in that email signs you in, rather than landing on a "check your
       inbox" page.
 - [ ] Registration refuses a date of birth under 18, with an explanation.
-- [ ] Enrol in a domain; the offer letter PDF downloads and opens.
+- [ ] Registration succeeds with the phone field left blank.
+- [ ] The state picker lists Indian states, and becomes a text box when the
+      country is changed.
+- [ ] Sign-in is blocked until the terms box is ticked.
+- [ ] Enrol in a domain; the offer letter PDF downloads and opens, and the seal
+      on it carries no street name.
 - [ ] Submit a task from the student side; it appears in the admin queue.
 - [ ] Approve the last task; the certificate is issued immediately.
 - [ ] The QR code on that certificate resolves to the public verification page.
 - [ ] Paste the certificate number into `/verify` — it validates and is found.
 - [ ] Reset your password; confirm the old session is signed out.
 - [ ] Close the test account, then confirm the certificate still verifies.
-
-Delete the test account's leftovers afterwards, or leave it — it is now an
-anonymous shell either way.
 
 ---
 
@@ -394,8 +452,8 @@ STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 DIR=/srv/kls/backups
 mkdir -p "$DIR"
 
-docker compose -f /srv/kls/docker-compose.prod.yml exec -T db \
-  pg_dump -U kls -Fc kls_academy > "$DIR/kls_$STAMP.dump"
+PGPASSWORD="$DB_PASSWORD" pg_dump -h localhost -U kls -Fc kls_academy \
+  > "$DIR/kls_$STAMP.dump"
 
 # Off the server. A backup on the same disk as the database protects against
 # exactly one failure mode — a bad DELETE — and none of the others.
@@ -409,13 +467,16 @@ find "$DIR" -name 'kls_*.dump' -mtime +14 -delete
 chmod +x /srv/kls/backup.sh
 ```
 
+Put `DB_PASSWORD` in `/srv/kls/backup.env` (`chmod 600`) and source it from
+cron rather than writing the password into the script.
+
 Configure `rclone` for the R2 bucket (`rclone config`, S3 provider,
 Cloudflare), then schedule it:
 
 ```bash
 crontab -e
 # 02:30 UTC = 08:00 IST — after the quiet hours, before the day starts.
-30 2 * * * /srv/kls/backup.sh >> /srv/kls/backup.log 2>&1
+30 2 * * * . /srv/kls/backup.env && /srv/kls/backup.sh >> /srv/kls/backup.log 2>&1
 ```
 
 ### 8.2 Also back up
@@ -423,26 +484,27 @@ crontab -e
 - `/srv/kls/kls-api/.env` — encrypted, into the password manager, not R2
 - The R2 bucket itself. Uploaded screenshots and PDFs are not in the database.
   Enable versioning on the bucket.
+- `/etc/systemd/system/kls-*.service` and `/etc/caddy/Caddyfile` — small, and
+  they are the difference between a one-hour rebuild and a one-day one.
 
 ### 8.3 Rehearse a restore — do this once, now
 
 ```bash
-# A scratch database beside the real one
-docker compose -f docker-compose.prod.yml exec db createdb -U kls restore_test
-docker compose -f docker-compose.prod.yml exec -T db \
-  pg_restore -U kls -d restore_test < /srv/kls/backups/<latest>.dump
+sudo -u postgres createdb -O kls restore_test
+PGPASSWORD="$DB_PASSWORD" pg_restore -h localhost -U kls -d restore_test \
+  /srv/kls/backups/<latest>.dump
 
-docker compose -f docker-compose.prod.yml exec db \
-  psql -U kls -d restore_test -c "select count(*) from users;"
-docker compose -f docker-compose.prod.yml exec db \
-  psql -U kls -d restore_test -c "select count(*) from certificates;"
+PGPASSWORD="$DB_PASSWORD" psql -h localhost -U kls -d restore_test \
+  -c "select count(*) from users;"
+PGPASSWORD="$DB_PASSWORD" psql -h localhost -U kls -d restore_test \
+  -c "select count(*) from certificates;"
 
-docker compose -f docker-compose.prod.yml exec db dropdb -U kls restore_test
+sudo -u postgres dropdb restore_test
 ```
 
 If those counts are right, you have a backup. If the restore errored, you found
-that out on a Tuesday afternoon instead of during an incident, which is the
-entire point of doing it now.
+out on a Tuesday afternoon instead of during an incident, which is the entire
+point of doing it now.
 
 Write the date you did this at the bottom of this file.
 
@@ -474,14 +536,15 @@ Minimum viable, in the order worth doing:
 2. **Error tracking.** Add Sentry to the API and both frontends. Without it,
    the first you hear of a 500 is a student emailing you about it — if they
    bother.
-3. **Disk space.** Postgres and Docker images fill a small VPS quietly.
+3. **Disk space.** Postgres and old builds fill a small VPS quietly.
    ```bash
    df -h /
-   docker system df
+   du -sh /srv/kls/*/node_modules /srv/kls/backups
    ```
 4. **Logs**, when something is wrong:
    ```bash
-   docker compose -f docker-compose.prod.yml logs -f api --tail 200
+   journalctl -u kls-api -f -n 200
+   journalctl -u kls-academy -n 100
    journalctl -u caddy -n 100
    ```
 
@@ -492,21 +555,31 @@ Minimum viable, in the order worth doing:
 ```bash
 cd /srv/kls/<repository>
 git pull
-cd /srv/kls
-docker compose -f docker-compose.prod.yml up -d --build <service>
 ```
 
-Migrations run automatically as the API starts.
-
-**Take a dump before any deploy that includes a migration:**
+**API:**
 
 ```bash
-/srv/kls/backup.sh
+cd /srv/kls/kls-api
+.venv/bin/pip install -r requirements.txt   # only if requirements changed
+/srv/kls/backup.sh                          # before any migration
+.venv/bin/alembic upgrade head
+sudo systemctl restart kls-api
 ```
 
-There is a short outage while a container restarts — seconds for the API,
-rather longer for a frontend that has to build. Deploy when nobody is
-mid-submission.
+**A frontend:**
+
+```bash
+cd /srv/kls/KLS-academy
+npm ci && npm run build
+cp -r .next/static .next/standalone/.next/
+cp -r public .next/standalone/
+sudo systemctl restart kls-academy
+```
+
+The API restart is a second or two. A frontend build takes a few minutes, but
+the old process keeps serving throughout — only the restart at the end is
+visible, and that is also seconds.
 
 ### Rolling back
 
@@ -516,20 +589,20 @@ Code:
 cd /srv/kls/<repository>
 git log --oneline -5
 git checkout <previous-commit>
-cd /srv/kls && docker compose -f docker-compose.prod.yml up -d --build <service>
+# then rebuild/restart as above
 ```
 
 A migration:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec api alembic downgrade -1
+cd /srv/kls/kls-api && .venv/bin/alembic downgrade -1
 ```
 
 Every migration in this project has a tested `downgrade()` — CI runs the whole
 chain forward, back to base, and forward again on every push, so a reversal is
 not a leap of faith. It is still not free: a downgrade that drops a column
-drops the data in it. Prefer restoring from the dump you took five minutes
-earlier if any real data has been written since.
+drops the data in it. Prefer restoring from the dump you took minutes earlier
+if any real data has been written since.
 
 ---
 
@@ -537,20 +610,22 @@ earlier if any real data has been written since.
 
 | Symptom | Look here first |
 |---|---|
-| API container exits at once | `docker compose logs api` — config validation says exactly what is wrong |
-| 502 from Caddy | The container behind it is down or still starting: `docker compose ps` |
+| API fails at start | `journalctl -u kls-api -n 30` — config validation says exactly what is wrong |
+| 502 from Caddy | The service behind it is down: `systemctl status kls-api kls-academy kls-admin` |
+| Site loads unstyled, assets 404 | The `.next/static` and `public/` copy in §5 was missed after a build |
 | TLS not issuing | `journalctl -u caddy` — usually DNS, or a proxy in front of the challenge |
-| Emails not arriving | `email_logs` table shows whether we sent; then check the recipient's spam folder |
+| Emails not arriving | `email_logs` table shows whether we sent; then the recipient's spam folder |
 | Everyone logged out at once | `SECRET_KEY` changed, or a `token_version` bump; check what was deployed |
 | Uploads failing | R2 credentials, then bucket name, then the object size limit |
-| Slow, no obvious cause | `docker stats`, then `df -h` — a full disk presents as generic slowness |
+| Build killed with no error | Out of memory. Add swap — see §1 |
+| Slow, no obvious cause | `htop`, then `df -h` — a full disk presents as generic slowness |
 
 ### Emergency: end every session immediately
 
 If credentials are believed compromised, changing `SECRET_KEY` in `.env` and
-restarting the API invalidates every token in existence at once. Everyone is
-signed out and signs back in. It is blunt, instant, and reversible only in the
-sense that people can log in again.
+running `sudo systemctl restart kls-api` invalidates every token in existence at
+once. Everyone is signed out and signs back in. It is blunt, instant, and
+reversible only in the sense that people can log in again.
 
 ---
 
@@ -565,7 +640,6 @@ sense that people can log in again.
 **Monthly**
 
 - [ ] `sudo apt update && sudo apt upgrade`
-- [ ] `docker system prune -f` (images only; the volume holds the database)
 - [ ] Dependency audit — CI runs one on every push; read it
 - [ ] **Rehearse the restore again.** Backups rot silently.
 

@@ -76,6 +76,8 @@ def register(
         full_name=payload.full_name.strip(),
         email=payload.email.lower(),
         phone=payload.phone,
+        state=payload.state,
+        country=payload.country,
         password_hash=hash_password(payload.password),
         date_of_birth=payload.date_of_birth,
         role=UserRole.STUDENT,

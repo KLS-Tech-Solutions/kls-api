@@ -15,7 +15,17 @@ class User(Base, UUIDMixin, TimestampMixin):
 
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Optional. Nothing in the platform sends an SMS or places a call — every
+    # workflow runs on email — so demanding a number was collecting personal
+    # data we have no use for, which the DPDP Act calls out directly.
+    phone: Mapped[str | None] = mapped_column(String(20))
+
+    # Where the student is. Free text rather than a foreign key to a
+    # `states` table: the list of Indian states changes by act of Parliament,
+    # people register from outside India, and nothing in the product joins on
+    # this. The frontend offers a picker so the common case stays consistent.
+    state: Mapped[str | None] = mapped_column(String(80))
+    country: Mapped[str | None] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole, name="user_role", native_enum=False),

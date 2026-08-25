@@ -78,7 +78,9 @@ def update_profile(
         db.add(profile)
 
     data = payload.model_dump(exclude_unset=True)
-    for field in ("full_name", "phone"):
+    # These live on the user row, not the student profile, so they are split
+    # off before the rest is applied to the profile.
+    for field in ("full_name", "phone", "state", "country"):
         if data.get(field):
             setattr(student, field, data.pop(field))
         else:
@@ -374,7 +376,9 @@ def delete_account(
     ).update({EmailToken.used_at: datetime.now(timezone.utc)}, synchronize_session=False)
 
     student.full_name = "Deleted user"
-    student.phone = ""
+    student.phone = None
+    student.state = None
+    student.country = None
     # Unique, unusable, and clearly not a real address.
     student.email = f"deleted+{student.id}@account.invalid"
     student.password_hash = hash_password(generate_url_token())

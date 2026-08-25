@@ -363,8 +363,11 @@ def _render_offer_letter(
         "A reviewer reads every submission and returns feedback if changes are "
         "needed. The next task unlocks as soon as you submit, not when you are "
         "approved, so review time never holds you up.",
-        "The internship itself is free. A one-time certificate issuance fee "
-        "applies on completion, as set out in the terms of service.",
+        "Everything here is free — the study notes, the internship and the "
+        "certificate. There is no fee at any stage and we never ask for card "
+        "or bank details.",
+        "Each domain includes chapter-wise study notes as downloadable PDFs, "
+        "ordered from beginner to advanced. They are yours to keep.",
         "This is a learning engagement and does not constitute an offer of "
         "employment or a contract of service.",
     ]

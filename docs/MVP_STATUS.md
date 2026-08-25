@@ -133,7 +133,8 @@ into `SMTP_*` in `.env`. No code changes.
 
 ### Not needed
 
-Docker (you're running natively), Kubernetes, Redis, a CDN beyond Vercel's, and any
+Docker and Kubernetes (the platform runs directly on the host), Redis, a CDN
+beyond Vercel's, and any
 paid analytics — the admin console already reports what the PRD asks for.
 
 ---
@@ -170,8 +171,8 @@ Nothing in step 1–2 is blocked on me, but these are code and I can do them tod
   ready and waiting when your account is approved
 - **Email templates** — the eight from the schema doc, written and wired, dormant until
   `SMTP_HOST` is set
-- **Deployment configuration** — Dockerfile for the VPS, nginx/Caddy config, systemd
-  service, Vercel settings, and a deployment runbook
+- **Deployment configuration** — Caddy config, systemd units, Vercel settings, and a
+  deployment runbook
 - **Frontend end-to-end tests** covering the full student journey
 
 The most useful of these is the deployment configuration, because it is the one thing

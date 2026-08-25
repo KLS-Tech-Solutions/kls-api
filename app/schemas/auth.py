@@ -20,7 +20,9 @@ class UserOut(ORMModel):
     id: uuid.UUID
     full_name: str
     email: str
-    phone: str
+    phone: str | None = None
+    state: str | None = None
+    country: str | None = None
     role: UserRole
     status: UserStatus
     email_verified: bool
@@ -31,7 +33,10 @@ class UserOut(ORMModel):
 class RegisterRequest(BaseModel):
     full_name: str = Field(min_length=2, max_length=100)
     email: EmailStr
-    phone: str
+    # Optional: no part of the platform contacts a student by phone.
+    phone: str | None = Field(default=None, max_length=20)
+    state: str | None = Field(default=None, max_length=80)
+    country: str | None = Field(default=None, max_length=80)
     password: str = Field(min_length=8, max_length=72)
     date_of_birth: date
 
@@ -62,11 +67,27 @@ class RegisterRequest(BaseModel):
 
     @field_validator("phone")
     @classmethod
-    def valid_indian_mobile(cls, value: str) -> str:
+    def valid_indian_mobile(cls, value: str | None) -> str | None:
+        """
+        Optional, but still validated when supplied.
+
+        Blank and whitespace-only both become None rather than an empty
+        string — a form that submits `""` for an untouched field should not
+        write a value that later reads as "they gave us a number".
+        """
+        if value is None or not value.strip():
+            return None
         cleaned = re.sub(r"[\s\-()]", "", value)
         if not PHONE_RE.match(cleaned):
             raise ValueError("Enter a valid 10-digit Indian mobile number")
         return cleaned
+
+    @field_validator("state", "country")
+    @classmethod
+    def tidy_place(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return value.strip()
 
     @field_validator("password")
     @classmethod
