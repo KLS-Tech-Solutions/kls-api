@@ -17,18 +17,23 @@ call to `/me/journey` arrives at FastAPI as `GET /api/v1/me/journey`.
 
 | Method | Path | Body | Returns |
 | --- | --- | --- | --- |
-| POST | `/auth/register` *(public)* | `{ full_name, email, phone, password }` | `201 { email, email_verified: false }` |
+| POST | `/auth/register` *(public)* | `{ full_name, email, phone?, state, country, date_of_birth, password }` | `201 { email, email_verified: true, email_sent }` |
 | POST | `/auth/login` *(public)* | `{ email, password }` | `{ access_token, refresh_token, expires_in, user }` |
 | POST | `/auth/refresh` *(public)* | `{ refresh_token }` | `{ access_token, refresh_token, expires_in }` |
 | POST | `/auth/logout` | — | `204` |
 | GET | `/auth/me` | — | `{ user }` |
 | POST | `/auth/forgot-password` *(public)* | `{ email }` | `204` — always, even for unknown emails |
 | POST | `/auth/reset-password` *(public)* | `{ token, password }` | `204` |
-| POST | `/auth/verify-email` *(public)* | `{ token }` | `204` |
 | GET | `/auth/invite/{token}` *(public)* | — | `{ full_name, email, role }` · 400 if used/expired |
 | POST | `/auth/accept-invite` *(public)* | `{ token, password }` | `204` — sets the password and activates |
 
 `expires_in` is seconds. If omitted the frontend assumes 30 minutes.
+
+**There is no email verification step.** `/auth/register` returns an account
+that is already `active` and `email_verified`, and the student can sign in
+immediately. The welcome email carries no link to click. `/auth/verify-email`
+and `/auth/resend-verification` were removed; the academy app answers both with
+410 and a sentence, for anyone holding an old link.
 
 ---
 

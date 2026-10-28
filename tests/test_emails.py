@@ -94,13 +94,35 @@ def test_emails_are_sent_as_html_and_plain_text(client, outbox):
 # --- Account emails --------------------------------------------------------
 
 
-def test_registration_sends_a_verification_link(client, outbox):
+def test_registration_sends_a_welcome_with_nothing_to_click(client, outbox):
+    """
+    The welcome email is a courtesy, not a gate. There is no verification step,
+    so it must not contain a link that looks like one — a student who thinks
+    their account is pending until they click something will wait forever.
+    """
     response = client.post("/api/v1/auth/register", json=STUDENT)
     assert response.status_code == 201
 
-    message = only(outbox, "verify your email")
+    message = only(outbox, "welcome")
     assert message["to"] == "ananya@example.com"
-    assert "/verify-email?token=" in message["html"]
+    assert "/verify-email" not in message["html"]
+    assert "token=" not in message["html"]
+    # It does tell them which address they used, which is what makes a later
+    # password reset findable.
+    assert "ananya@example.com" in message["html"]
+
+
+def test_the_account_works_immediately_without_touching_email(client):
+    """Register, then sign in. No step in between."""
+    client.post("/api/v1/auth/register", json=STUDENT)
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": STUDENT["email"], "password": STUDENT["password"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["user"]["email_verified"] is True
+    assert response.json()["user"]["status"] == "active"
 
 
 def test_password_reset_sends_a_link(client, outbox):
@@ -122,28 +144,15 @@ def test_no_reset_email_for_an_unknown_address(client, outbox):
     assert outbox == []
 
 
-def test_resend_verification_issues_a_fresh_link(client, outbox):
-    client.post("/api/v1/auth/register", json=STUDENT)
-    first = only(outbox, "verify your email")["html"]
-    outbox.clear()
-
-    client.post("/api/v1/auth/resend-verification", json={"email": STUDENT["email"]})
-    second = only(outbox, "verify your email")["html"]
-
-    assert first != second, "a resend must issue a new token"
-
-
-def test_resend_is_silent_for_a_verified_account(client, db_session, outbox):
-    client.post("/api/v1/auth/register", json=STUDENT)
-    from sqlalchemy import select
-
-    user = db_session.scalar(select(User).where(User.email == STUDENT["email"]))
-    user.email_verified = True
-    db_session.commit()
-    outbox.clear()
-
-    client.post("/api/v1/auth/resend-verification", json={"email": STUDENT["email"]})
-    assert outbox == []
+def test_the_verification_endpoints_are_gone(client):
+    """
+    Both routes were removed with the verification step. They are asserted
+    absent rather than simply deleted from the suite, so that re-adding one by
+    accident — and with it a half-wired flow that leaves accounts PENDING —
+    fails here rather than in production.
+    """
+    for path in ("/api/v1/auth/verify-email", "/api/v1/auth/resend-verification"):
+        assert client.post(path, json={"token": "x", "email": "a@example.com"}).status_code == 404
 
 
 # --- Journey emails --------------------------------------------------------

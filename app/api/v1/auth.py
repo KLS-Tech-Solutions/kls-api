@@ -36,11 +36,10 @@ from app.schemas.auth import (
     ResetPasswordRequest,
     TokenPair,
     UserOut,
-    VerifyEmailRequest,
 )
 from app.services.email import (
     send_password_reset,
-    send_welcome_verification,
+    send_welcome,
 )
 from app.services.notifications import log_activity, notify
 
@@ -61,8 +60,8 @@ def register(
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    # Registration sends a verification email, so an unlimited endpoint is a
-    # way to spend the daily quota and stop real students signing up.
+    # Registration sends a welcome email, so an unlimited endpoint is a way to
+    # spend the daily quota and stop real students signing up.
     enforce(request, REGISTER, scope="register")
 
     existing = db.scalar(select(User).where(User.email == payload.email.lower()))
@@ -72,6 +71,20 @@ def register(
             detail="An account with this email already exists",
         )
 
+    # The account is usable immediately. There is no verification step: the
+    # form is the whole of signing up, and the welcome email is a courtesy
+    # rather than a gate.
+    #
+    # This is not as large a change as it looks. `login` has only ever refused
+    # DELETED and SUSPENDED accounts — a PENDING one could always sign in — so
+    # verification was already decorative for students. What it did do was send
+    # people to a "check your inbox" page and leave `email_verified` false
+    # forever for anyone who ignored it.
+    #
+    # The cost is stated plainly: nothing now proves the address is real. A
+    # typo means every notification silently fails, and someone can register
+    # with an address they do not own. Both are accepted trade-offs for
+    # removing a step that stopped perhaps a third of signups.
     user = User(
         full_name=payload.full_name.strip(),
         email=payload.email.lower(),
@@ -81,21 +94,13 @@ def register(
         password_hash=hash_password(payload.password),
         date_of_birth=payload.date_of_birth,
         role=UserRole.STUDENT,
-        status=UserStatus.PENDING,
-        email_verified=False,
+        status=UserStatus.ACTIVE,
+        email_verified=True,
     )
     db.add(user)
     db.flush()
 
     db.add(StudentProfile(user_id=user.id))
-
-    token = EmailToken(
-        user_id=user.id,
-        token=generate_url_token(),
-        purpose="verify_email",
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-    )
-    db.add(token)
 
     notify(
         db,
@@ -107,20 +112,20 @@ def register(
     log_activity(db, user.id, "Registered", "auth", str(user.id), _client_ip(request))
     db.commit()
 
-    outbox = send_welcome_verification(
+    outbox = send_welcome(
         background,
         user_id=user.id,
         to=user.email,
         full_name=user.full_name,
-        token=token.token,
     )
 
     return {
         "email": user.email,
-        "email_verified": False,
+        "email_verified": True,
+        # Whether the welcome mail went out. Nothing depends on it — the
+        # account works either way — but the form uses it to decide whether to
+        # mention the inbox at all.
         "email_sent": outbox.delivered,
-        # Returned only when email is unconfigured, so the flow is testable.
-        "verification_token": None if outbox.delivered else token.token,
     }
 
 
@@ -233,16 +238,6 @@ def me(user: User = Depends(get_current_user)):
     return {"user": UserOut.model_validate(user).model_dump(mode="json")}
 
 
-@router.post("/verify-email", status_code=status.HTTP_204_NO_CONTENT)
-def verify_email(payload: VerifyEmailRequest, db: Session = Depends(get_db)):
-    token = _consume_token(db, payload.token, "verify_email")
-    user = db.get(User, token.user_id)
-    if user is not None:
-        user.email_verified = True
-        user.status = UserStatus.ACTIVE
-    db.commit()
-
-
 @router.post("/forgot-password", status_code=status.HTTP_204_NO_CONTENT)
 def forgot_password(
     payload: ForgotPasswordRequest,
@@ -270,48 +265,6 @@ def forgot_password(
         send_password_reset(
             background, user_id=user.id, to=user.email, token=token.token
         )
-
-
-@router.post("/resend-verification", status_code=status.HTTP_204_NO_CONTENT)
-def resend_verification(
-    payload: ForgotPasswordRequest,
-    request: Request,
-    background: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    """
-    Always 204, like forgot-password — this endpoint must not confirm whether
-    an address is registered or already verified.
-    """
-    enforce(request, EMAIL_SEND, scope="resend", identifier=payload.email)
-
-    user = db.scalar(select(User).where(User.email == payload.email.lower()))
-    if user is None or user.email_verified or user.status == UserStatus.DELETED:
-        return
-
-    # Any earlier link stops working the moment a new one is issued.
-    db.query(EmailToken).filter(
-        EmailToken.user_id == user.id,
-        EmailToken.purpose == "verify_email",
-        EmailToken.used_at.is_(None),
-    ).update({EmailToken.used_at: datetime.now(timezone.utc)}, synchronize_session=False)
-
-    token = EmailToken(
-        user_id=user.id,
-        token=generate_url_token(),
-        purpose="verify_email",
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-    )
-    db.add(token)
-    db.commit()
-
-    send_welcome_verification(
-        background,
-        user_id=user.id,
-        to=user.email,
-        full_name=user.full_name,
-        token=token.token,
-    )
 
 
 @router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)

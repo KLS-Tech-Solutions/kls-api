@@ -135,6 +135,13 @@ class ResetPasswordRequest(BaseModel):
 
 
 class VerifyEmailRequest(BaseModel):
+    """
+    Unused. Registration activates the account outright — there is no
+    verification step — so nothing posts this any more. Kept only so an older
+    client that still sends it gets a 404 for the route rather than an import
+    error here, and it can be deleted once no such client exists.
+    """
+
     token: str
 
 

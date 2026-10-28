@@ -286,29 +286,46 @@ def _academy(path: str = "") -> str:
     return f"{settings.ACADEMY_BASE_URL.rstrip('/')}{path}"
 
 
-def send_welcome_verification(
-    background, *, user_id, to: str, full_name: str, token: str
-) -> Outbox:
-    url = _academy(f"/verify-email?token={token}")
-    first = full_name.split()[0]
+def send_welcome(background, *, user_id, to: str, full_name: str) -> Outbox:
+    """
+    A welcome, not a gate.
+
+    There is no verification step: the account already works by the time this
+    is sent. So this carries no link to click and nothing that expires — it
+    confirms the account exists, says what to do next, and is safe to ignore.
+
+    It is still worth sending. For most students it is the only written record
+    of which address they signed up with, which matters later when a password
+    reset goes to an address they have forgotten choosing.
+    """
+    first = full_name.split()[0] if full_name.split() else full_name
     return queue_email(
         background,
         user_id=user_id,
         to=to,
-        subject="Verify your email — KLS Academy",
+        subject="Welcome to KLS Academy",
         template_name="welcome",
         heading=f"Welcome to KLS Academy, {first}",
         body_html=(
-            "<p>Your account is created. Confirm this email address to activate it and "
-            "choose your internship domain.</p>"
-            "<p>This link expires in 24 hours.</p>"
+            "<p>Your account is ready to use — there is nothing to confirm. "
+            "Sign in whenever you like and choose an internship domain to "
+            "begin.</p>"
+            "<p>Every domain comes with chapter-wise study notes you can "
+            "download and keep, free. You do not have to enrol to start "
+            "reading them.</p>"
+            f"<p>You signed up with <strong>{to}</strong>. Keep this email — "
+            "it is the record of which address to use if you ever need to "
+            "reset your password.</p>"
         ),
         body_text=[
-            "Your account is created. Confirm this email address to activate it and "
-            "choose your internship domain.",
-            "This link expires in 24 hours.",
+            "Your account is ready to use — there is nothing to confirm. Sign "
+            "in whenever you like and choose an internship domain to begin.",
+            "Every domain comes with chapter-wise study notes you can download "
+            "and keep, free. You do not have to enrol to start reading them.",
+            f"You signed up with {to}. Keep this email — it is the record of "
+            "which address to use if you ever need to reset your password.",
         ],
-        cta=("Verify my email", url),
+        cta=("Sign in to KLS Academy", _academy("/login")),
     )
 
 

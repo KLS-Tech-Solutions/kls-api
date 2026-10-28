@@ -148,6 +148,12 @@ dig +short api.klstechsolutions.in
 
 ## 3. Database
 
+> **Using Supabase? Skip this entire section.** Your database is managed and
+> lives elsewhere — do not install PostgreSQL on this machine. Your
+> `DATABASE_URL` is the session-pooler string from `docs/SUPABASE.md`, and in
+> §5 you should also drop `postgresql.service` from the API unit's `After=`
+> and `Requires=` lines, since there is no local database to wait for.
+
 ```bash
 sudo -u postgres psql
 ```

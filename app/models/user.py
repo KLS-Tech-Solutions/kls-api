@@ -136,6 +136,10 @@ class EmailToken(Base, UUIDMixin, TimestampMixin):
         GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     token: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    purpose: Mapped[str] = mapped_column(String(30), nullable=False)  # verify_email | reset_password
+    # Only "reset_password" is issued now. The column stays a string rather
+    # than an enum because "verify_email" rows may still exist from before
+    # registration stopped requiring verification, and a narrowed enum would
+    # make those rows unreadable.
+    purpose: Mapped[str] = mapped_column(String(30), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -23,7 +23,8 @@ def test_register_creates_pending_student(client):
     response = client.post("/api/v1/auth/register", json=STUDENT)
     assert response.status_code == 201
     assert response.json()["email"] == "ananya@example.com"
-    assert response.json()["email_verified"] is False
+    # Active and usable immediately — there is no verification step.
+    assert response.json()["email_verified"] is True
 
 
 def test_duplicate_email_is_rejected(client):

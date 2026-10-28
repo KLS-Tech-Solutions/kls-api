@@ -5,8 +5,8 @@ Three distinct problems, one mechanism:
 
 * **Login** can be brute-forced. Without a limit, a password is guessable at
   machine speed and nothing slows it down.
-* **Forgot-password and resend-verification** send mail to any address given to
-  them, so they can be pointed at someone to bombard their inbox.
+* **Forgot-password and registration** send mail to any address given to them,
+  so they can be pointed at someone to bombard their inbox.
 * Those same endpoints spend the platform's daily email quota. Exhausting it
   costs an attacker nothing and stops legitimate students signing up, which is
   a denial of service with no packets flooded.
