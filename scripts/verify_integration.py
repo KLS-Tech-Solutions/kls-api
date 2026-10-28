@@ -8,6 +8,15 @@ and asserts that every admin action is reflected on the student side:
 
 Uses its own SQLite file so it never touches your development data.
 """
+
+import sys
+from pathlib import Path
+
+# Running this as `python scripts/verify_integration.py` puts *this* directory on sys.path,
+# not the repository root, so `import app` fails. Adding the root explicitly is
+# what makes the documented invocation work — and it is exactly how CI runs it.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import io
 import os
 

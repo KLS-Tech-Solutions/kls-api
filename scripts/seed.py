@@ -11,6 +11,14 @@ to hunt down later.
 Idempotent — safe to run repeatedly.
 """
 
+import sys
+from pathlib import Path
+
+# Running this as `python scripts/seed.py` puts *this* directory on sys.path,
+# not the repository root, so `import app` fails. Adding the root explicitly is
+# what makes the documented invocation work — and it is exactly how CI runs it.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from sqlalchemy import select
 
 from app.core.config import settings
