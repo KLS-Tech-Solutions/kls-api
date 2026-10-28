@@ -28,7 +28,13 @@ Three pieces, three names:
 | Admin console | `KLS-admin-dashboard` | port 3001 | `admin.klstechsolutions.in` |
 | API | `kls-api` | port 8000 | `api.klstechsolutions.in` |
 
-Plus PostgreSQL 17, and Cloudflare R2 for uploaded files.
+Plus PostgreSQL — either installed on this machine (§3) or managed by
+Supabase (`docs/SUPABASE.md`).
+
+**Uploaded files live on this server's disk**, under `MEDIA_ROOT`. There is no
+object store. Offer letters, certificates, chapter notes and task screenshots
+exist in exactly one place, which makes §8 load-bearing rather than
+precautionary.
 
 ### The machine
 
@@ -42,7 +48,8 @@ Ubuntu 24.04 LTS. Any distribution works; the commands assume that one.
 
 - [ ] VPS, with its IP address
 - [ ] DNS control for `klstechsolutions.in`
-- [ ] Cloudflare R2 bucket and API token
+- [ ] Somewhere off this server to put backups (any S3-compatible bucket,
+      or another machine you can `rsync` to)
 - [ ] SMTP credentials that can send as your sending address
 - [ ] A password manager entry, shared with a second person (see §9)
 
@@ -165,6 +172,11 @@ sudo grep -E "^listen_addresses" /etc/postgresql/*/main/postgresql.conf
 
 ```bash
 sudo mkdir -p /srv/kls && sudo chown kls:kls /srv/kls
+
+# Uploaded files and rendered PDFs. Deliberately a sibling of the code, not a
+# child: `git pull` and a rebuild must never be able to touch it.
+mkdir -p /srv/kls/media && chmod 750 /srv/kls/media
+
 cd /srv/kls
 git clone <your-remote>/kls-api.git
 git clone <your-remote>/KLS-academy.git
@@ -191,6 +203,8 @@ Start from `.env.example` and set:
 ENVIRONMENT=production
 DEBUG=false
 
+# Local Postgres (§3). For Supabase instead, see docs/SUPABASE.md — use the
+# session pooler on port 5432 and append ?sslmode=require.
 DATABASE_URL=postgresql+psycopg://kls:<DB_PASSWORD>@localhost:5432/kls_academy
 SECRET_KEY=<SECRET_KEY>
 
@@ -199,10 +213,9 @@ CORS_ORIGINS=https://academy.klstechsolutions.in,https://admin.klstechsolutions.
 
 MINIMUM_AGE=18
 
-R2_ACCOUNT_ID=...
-R2_ACCESS_KEY_ID=...
-R2_SECRET_ACCESS_KEY=...
-R2_BUCKET=kls-academy
+# Outside the code directory, on purpose. A redeploy replaces /srv/kls/kls-api;
+# a media folder inside it would go with every certificate ever issued.
+MEDIA_ROOT=/srv/kls/media
 
 SMTP_HOST=...
 SMTP_PORT=587
@@ -293,7 +306,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/srv/kls/kls-api/media
+ReadWritePaths=/srv/kls/media
 
 [Install]
 WantedBy=multi-user.target
@@ -426,6 +439,10 @@ Then, in a browser:
 - [ ] Sign-in is blocked until the terms box is ticked.
 - [ ] Enrol in a domain; the offer letter PDF downloads and opens, and the seal
       on it carries no street name.
+- [ ] A file appeared under `/srv/kls/media/offer-letters/` — this is the proof
+      that `MEDIA_ROOT` is writable and pointing where you think.
+- [ ] Upload a chapter PDF from the admin console, then **Read** and
+      **Download** it as a student. Read opens in a viewer, Download saves.
 - [ ] Submit a task from the student side; it appears in the admin queue.
 - [ ] Approve the last task; the certificate is issued immediately.
 - [ ] The QR code on that certificate resolves to the public verification page.
@@ -440,7 +457,22 @@ Then, in a browser:
 **A backup you have never restored is a hypothesis.** This section is not done
 until §8.3 has actually been run.
 
-### 8.1 Nightly dump
+**There are now two things to back up, not one.** The database holds the
+records; `/srv/kls/media` holds every rendered PDF, every uploaded chapter and
+every task screenshot. There is no object store behind that directory — it is
+the only copy. A database restore without the media is a platform where every
+chapter download 404s.
+
+Offer letters and certificates are the exception: they regenerate from their
+database record on the next download, so losing those is recoverable. **Chapter
+notes and task screenshots are not** — nothing can reconstruct a PDF an admin
+uploaded or a screenshot a student submitted.
+
+If you move the database to Supabase (`docs/SUPABASE.md`), the free plan takes
+**no** automatic backups, so this section is the only thing standing between
+you and permanent loss.
+
+### 8.1 Nightly backup
 
 `/srv/kls/backup.sh`:
 
@@ -452,26 +484,36 @@ STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 DIR=/srv/kls/backups
 mkdir -p "$DIR"
 
-PGPASSWORD="$DB_PASSWORD" pg_dump -h localhost -U kls -Fc kls_academy \
-  > "$DIR/kls_$STAMP.dump"
+# --- database ---------------------------------------------------------------
+# DATABASE_URL works for a local Postgres and for Supabase alike, so this line
+# does not change when you migrate.
+pg_dump -Fc "$DATABASE_URL" > "$DIR/kls_$STAMP.dump"
 
-# Off the server. A backup on the same disk as the database protects against
-# exactly one failure mode — a bad DELETE — and none of the others.
-rclone copy "$DIR/kls_$STAMP.dump" r2:kls-backups/
+# --- uploaded files ---------------------------------------------------------
+# Incremental would be cheaper, but a single dated archive is restorable by
+# somebody who has never seen this script before, which matters more at 2am.
+tar -czf "$DIR/media_$STAMP.tar.gz" -C /srv/kls media
+
+# --- off the server ---------------------------------------------------------
+# A backup on the same disk as the data protects against exactly one failure
+# mode — a bad DELETE — and none of the others.
+rclone copy "$DIR/kls_$STAMP.dump"       remote:kls-backups/
+rclone copy "$DIR/media_$STAMP.tar.gz"   remote:kls-backups/
 
 # Keep a fortnight locally.
-find "$DIR" -name 'kls_*.dump' -mtime +14 -delete
+find "$DIR" -name 'kls_*.dump'     -mtime +14 -delete
+find "$DIR" -name 'media_*.tar.gz' -mtime +14 -delete
 ```
 
 ```bash
 chmod +x /srv/kls/backup.sh
 ```
 
-Put `DB_PASSWORD` in `/srv/kls/backup.env` (`chmod 600`) and source it from
-cron rather than writing the password into the script.
+Put `DATABASE_URL` in `/srv/kls/backup.env` (`chmod 600`) and source it from
+cron rather than writing credentials into the script.
 
-Configure `rclone` for the R2 bucket (`rclone config`, S3 provider,
-Cloudflare), then schedule it:
+Configure `rclone` for wherever the backups go (`rclone config` — any
+S3-compatible bucket, or `sftp` to another machine), then schedule it:
 
 ```bash
 crontab -e
@@ -479,27 +521,46 @@ crontab -e
 30 2 * * * . /srv/kls/backup.env && /srv/kls/backup.sh >> /srv/kls/backup.log 2>&1
 ```
 
+Watch the media archive's size for the first few weeks. Screenshots accumulate
+faster than anything else here, and a nightly full tar stops being sensible
+somewhere north of a few gigabytes — at that point move to `rclone sync` of the
+directory plus a weekly archive.
+
 ### 8.2 Also back up
 
-- `/srv/kls/kls-api/.env` — encrypted, into the password manager, not R2
-- The R2 bucket itself. Uploaded screenshots and PDFs are not in the database.
-  Enable versioning on the bucket.
+- `/srv/kls/kls-api/.env` — encrypted, into the password manager, not the
+  backup bucket
 - `/etc/systemd/system/kls-*.service` and `/etc/caddy/Caddyfile` — small, and
-  they are the difference between a one-hour rebuild and a one-day one.
+  they are the difference between a one-hour rebuild and a one-day one
 
 ### 8.3 Rehearse a restore — do this once, now
 
+**The database:**
+
 ```bash
 sudo -u postgres createdb -O kls restore_test
-PGPASSWORD="$DB_PASSWORD" pg_restore -h localhost -U kls -d restore_test \
+pg_restore --no-owner -d "postgresql://kls@localhost/restore_test" \
   /srv/kls/backups/<latest>.dump
 
-PGPASSWORD="$DB_PASSWORD" psql -h localhost -U kls -d restore_test \
-  -c "select count(*) from users;"
-PGPASSWORD="$DB_PASSWORD" psql -h localhost -U kls -d restore_test \
-  -c "select count(*) from certificates;"
+psql "postgresql://kls@localhost/restore_test" -c "select count(*) from users;"
+psql "postgresql://kls@localhost/restore_test" -c "select count(*) from certificates;"
+psql "postgresql://kls@localhost/restore_test" -c "select count(*) from learning_chapters;"
 
 sudo -u postgres dropdb restore_test
+```
+
+**The media archive** — equally important, and the half people skip:
+
+```bash
+mkdir -p /tmp/restore-test
+tar -xzf /srv/kls/backups/media_<latest>.tar.gz -C /tmp/restore-test
+
+# The three directories that matter, and a spot check that a PDF is a PDF
+# rather than a zero-byte file the archive dutifully preserved.
+ls /tmp/restore-test/media/{chapters,certificates,offer-letters}
+find /tmp/restore-test/media -name '*.pdf' | head -1 | xargs file
+
+rm -rf /tmp/restore-test
 ```
 
 If those counts are right, you have a backup. If the restore errored, you found
@@ -516,8 +577,8 @@ Right now, one person can do everything and nobody else can do anything. That
 is a single point of failure wearing a hat.
 
 - [ ] Put every credential in a shared password manager: SSH key, VPS console
-      login, DNS, R2 token, SMTP, `SECRET_KEY`, database password, super-admin
-      login.
+      login, DNS, backup storage, SMTP, `SECRET_KEY`, database password,
+      super-admin login.
 - [ ] Give a second trusted person access to it.
 - [ ] Create a **second super admin account** through the admin console. One
       forgotten password should not lock the organisation out of its own
@@ -539,8 +600,9 @@ Minimum viable, in the order worth doing:
 3. **Disk space.** Postgres and old builds fill a small VPS quietly.
    ```bash
    df -h /
-   du -sh /srv/kls/*/node_modules /srv/kls/backups
+   du -sh /srv/kls/media /srv/kls/backups /srv/kls/*/node_modules
    ```
+   `media` only ever grows. Screenshots are the bulk of it.
 4. **Logs**, when something is wrong:
    ```bash
    journalctl -u kls-api -f -n 200
@@ -616,7 +678,8 @@ if any real data has been written since.
 | TLS not issuing | `journalctl -u caddy` — usually DNS, or a proxy in front of the challenge |
 | Emails not arriving | `email_logs` table shows whether we sent; then the recipient's spam folder |
 | Everyone logged out at once | `SECRET_KEY` changed, or a `token_version` bump; check what was deployed |
-| Uploads failing | R2 credentials, then bucket name, then the object size limit |
+| Uploads failing | `MEDIA_ROOT` permissions, then `df -h` — a full disk fails writes |
+| Downloads 404 but the record exists | The file is gone from `MEDIA_ROOT`; offer letters and certificates regenerate on next download, chapter notes must be re-uploaded |
 | Build killed with no error | Out of memory. Add swap — see §1 |
 | Slow, no obvious cause | `htop`, then `df -h` — a full disk presents as generic slowness |
 
@@ -633,7 +696,8 @@ reversible only in the sense that people can log in again.
 
 **Weekly**
 
-- [ ] A backup file actually landed in R2 for each of the last seven days
+- [ ] A database dump **and** a media archive landed off-server for each of
+      the last seven days
 - [ ] `df -h` — disk under 80%
 - [ ] Sentry: anything new and repeating
 
@@ -645,7 +709,7 @@ reversible only in the sense that people can log in again.
 
 **Quarterly**
 
-- [ ] Rotate the R2 and SMTP credentials
+- [ ] Rotate the backup-storage and SMTP credentials
 - [ ] Confirm the second admin's access still works
 - [ ] Re-read §9 and check it is all still true
 

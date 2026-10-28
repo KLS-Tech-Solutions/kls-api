@@ -1,4 +1,4 @@
-> **Superseded — August 2026.** The product went open source and free. Payments were removed entirely, study notes were added, and storage was made private. Anything below about Razorpay, the certificate fee or a payment step is historical. See `README.md` for the current state.
+> **Superseded — October 2026.** The product went open source and free. Payments were removed entirely, study notes were added, and file storage moved off Cloudflare R2 onto the server's own disk. Anything below about Razorpay, the certificate fee, a payment step or an object store is historical. See `README.md`, `docs/DEPLOYMENT.md` and `docs/SUPABASE.md` for the current state.
 
 # Production Readiness Sprint — report
 

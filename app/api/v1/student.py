@@ -39,7 +39,7 @@ from app.services.journey import (
     get_active_enrollment,
 )
 from app.services.notifications import log_activity
-from app.services.storage import read_bytes
+from app.services.storage import content_disposition, read_bytes
 
 router = APIRouter(prefix="/me", tags=["student"])
 
@@ -159,11 +159,11 @@ def _offer_letter_response(db: Session, student: User, offer_letter: OfferLetter
             detail="The offer letter could not be generated",
         )
 
-    filename = f"KLS-Offer-Letter-{offer_letter.offer_letter_number.replace('/', '-')}.pdf"
+    number = offer_letter.offer_letter_number.replace("/", "-")
     return Response(
         content=pdf,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers=content_disposition(f"KLS-Offer-Letter-{number}"),
     )
 
 
@@ -189,11 +189,12 @@ def _certificate_response(db: Session, student: User, certificate: Certificate):
             detail="The certificate could not be generated",
         )
 
-    filename = f"KLS-Certificate-{certificate.certificate_number}.pdf"
     return Response(
         content=pdf,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers=content_disposition(
+            f"KLS-Certificate-{certificate.certificate_number}"
+        ),
     )
 
 

@@ -1,5 +1,6 @@
 import io
 import os
+import tempfile
 
 import pytest
 
@@ -7,12 +8,15 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
 
 # Hard overrides, not defaults: the developer's .env is loaded by
-# pydantic-settings, and a test suite that reaches real SMTP or real object
-# storage is a test suite that fails on someone else's laptop.
+# pydantic-settings, and a test suite that reaches a real mail server is a test
+# suite that fails on someone else's laptop.
 os.environ["SMTP_HOST"] = ""
-os.environ["R2_ACCESS_KEY_ID"] = ""
-os.environ["R2_SECRET_ACCESS_KEY"] = ""
 os.environ["ENVIRONMENT"] = "test"
+
+# Files go to a throwaway directory, never to the real media folder. Without
+# this, running the suite scatters test PDFs through the documents a developer
+# is actually serving.
+os.environ["MEDIA_ROOT"] = tempfile.mkdtemp(prefix="kls-test-media-")
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

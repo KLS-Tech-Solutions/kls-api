@@ -1,4 +1,4 @@
-> **Superseded — August 2026.** The product went open source and free. Payments were removed entirely, study notes were added, and storage was made private. Anything below about Razorpay, the certificate fee or a payment step is historical. See `README.md` for the current state.
+> **Superseded — October 2026.** The product went open source and free. Payments were removed entirely, study notes were added, and file storage moved off Cloudflare R2 onto the server's own disk. Anything below about Razorpay, the certificate fee, a payment step or an object store is historical. See `README.md`, `docs/DEPLOYMENT.md` and `docs/SUPABASE.md` for the current state.
 
 # KLS Academy MVP 001 — status against the PRD
 
@@ -48,7 +48,7 @@ rather than on code.
 | FR4 | Automatic PDF offer letter | ✅ |
 | FR5 | LinkedIn submission (Task 1) | ✅ |
 | FR6 | Internship task management | ✅ |
-| FR7 | Project submission | ✅ Files land in `./media` until R2 is connected |
+| FR7 | Project submission | ✅ Files are stored on local disk under `MEDIA_ROOT` |
 | FR8 | Admin review & approval | ✅ Both queues, remarks mandatory |
 | FR9 | Razorpay ₹50 payment | 🟡 Backend complete, checkout stubbed |
 | FR10 | QR certificate generation | ✅ |
@@ -103,7 +103,7 @@ Nothing is deployed. Two Vercel projects, one VPS, DNS, SSL, and a production da
 
 | Service | What for | Cost | Notes |
 | --- | --- | --- | --- |
-| **Cloudflare R2** | Screenshots, offer letters, certificates | Free to 10 GB/month | S3-compatible. Create a bucket, an API token, then fill `R2_*` in `.env`. **No egress fees** — the reason the PRD picked it |
+| **None** | Screenshots, offer letters, certificates | — | Stored on the server's own disk under `MEDIA_ROOT`. No object store, no third party, nothing to sign up for. The directory is the only copy, so it must be backed up — see `docs/DEPLOYMENT.md` §8 |
 | **Razorpay** | The ₹50 certificate fee | 2% per transaction | Needs KYC: PAN, bank account, and your **MSME/Udyam certificate**. Also needs your live legal pages |
 | **Email provider (SMTP)** | Verification, reset, invites, notifications | Free tiers available | See options below |
 | **VPS** | FastAPI + Postgres | ₹400–800/month | Hostinger, DigitalOcean or Contabo. 2 GB RAM is plenty |

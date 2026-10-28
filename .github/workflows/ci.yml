@@ -42,10 +42,8 @@ jobs:
       DATABASE_URL: postgresql+psycopg://kls:kls_ci_password@localhost:5432/kls_academy_test
       SECRET_KEY: ci-secret-key-not-used-anywhere-real-0123456789
       ENVIRONMENT: test
-      # Never reach a real mail server or a real bucket from CI.
+      # Never reach a real mail server from CI.
       SMTP_HOST: ""
-      R2_ACCESS_KEY_ID: ""
-      R2_SECRET_ACCESS_KEY: ""
 
     steps:
       - uses: actions/checkout@v4

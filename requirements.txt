@@ -18,7 +18,6 @@ pyjwt==2.11.0
 argon2-cffi==25.1.0
 
 # --- integrations ----------------------------------------------------------
-boto3==1.42.7            # Cloudflare R2 (S3-compatible)
 qrcode[pil]==8.2
 # Pure-Python PDF rendering — prebuilt wheels, no system libraries. Replaces
 # WeasyPrint, which needed GTK and did not install cleanly on Windows.

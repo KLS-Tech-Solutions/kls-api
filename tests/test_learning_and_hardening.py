@@ -339,11 +339,25 @@ def test_an_admin_manages_chapters_and_a_student_reads_them(
     assert chapters[0]["title"] == "Chapter 1 — HTTP and REST"
     assert chapters[0]["is_read"] is False
 
+    # Read in the browser: the same bytes, served inline so the viewer opens
+    # them rather than the browser saving them.
     pdf = client.get(
         f"/api/v1/me/chapters/{chapter_id}/download", headers=auth_headers(student)
     )
     assert pdf.status_code == 200
     assert pdf.content.startswith(b"%PDF")
+    assert pdf.headers["content-type"] == "application/pdf"
+    assert pdf.headers["content-disposition"].startswith("inline;")
+
+    # Keep a copy. Identical bytes, different disposition — the notes are meant
+    # to be downloaded and revised offline, not only read in a tab.
+    saved = client.get(
+        f"/api/v1/me/chapters/{chapter_id}/download?download=1",
+        headers=auth_headers(student),
+    )
+    assert saved.status_code == 200
+    assert saved.content == pdf.content
+    assert saved.headers["content-disposition"].startswith("attachment;")
 
     # Marking read is idempotent.
     for _ in range(2):

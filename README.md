@@ -195,7 +195,8 @@ filenames — anyone holding one certificate URL could increment the number and 
 every student's documents. Numbers are random now as well, but the bucket being private
 is the actual fix.
 
-- **No R2 credentials?** Uploads write to `./media` so the API runs on a laptop. The
+- **Where do uploads go?** To `MEDIA_ROOT` on local disk (`./media` by default). There
+  is no object store; in production point this outside the code directory. The
   directory is not mounted for static serving.
 
 ---

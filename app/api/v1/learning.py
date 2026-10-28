@@ -46,7 +46,12 @@ from app.schemas.internship import (
 )
 from app.services.journey import get_active_enrollment
 from app.services.notifications import log_activity
-from app.services.storage import StorageError, read_bytes, save_chapter_pdf
+from app.services.storage import (
+    StorageError,
+    content_disposition,
+    read_bytes,
+    save_chapter_pdf,
+)
 
 router = APIRouter(tags=["learning"])
 
@@ -111,6 +116,7 @@ def my_chapters(
 @router.get("/me/chapters/{chapter_id}/download")
 def download_chapter(
     chapter_id: uuid.UUID,
+    download: bool = False,
     student: User = Depends(get_current_student),
     db: Session = Depends(get_db),
 ):
@@ -118,8 +124,13 @@ def download_chapter(
     Streams the chapter PDF through the API rather than exposing a storage URL.
 
     Same reasoning as the offer letters: nothing student-facing is served from
-    a public bucket, so the material cannot be scraped wholesale by anyone who
+    a static path, so the material cannot be scraped wholesale by anyone who
     guesses a filename.
+
+    `?download=1` sends it as an attachment, so the student keeps a copy on
+    their own machine. Without it the PDF opens inline in the browser's viewer,
+    which is what reading a chapter wants. Both are the same bytes; only the
+    header differs.
     """
     chapter = _chapter_or_404(db, chapter_id)
     if chapter.status != PublishStatus.ACTIVE or not chapter.pdf_url:
@@ -132,11 +143,12 @@ def download_chapter(
             detail="The notes file is missing — an administrator has been notified",
         )
 
-    filename = chapter.pdf_filename or f"{chapter.title}.pdf"
     return Response(
         content=pdf,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        headers=content_disposition(
+            chapter.pdf_filename or chapter.title, download=download
+        ),
     )
 
 

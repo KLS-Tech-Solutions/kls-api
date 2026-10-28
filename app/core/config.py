@@ -1,7 +1,9 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 
 class Settings(BaseSettings):
@@ -37,13 +39,16 @@ class Settings(BaseSettings):
     # lower it without a code change.
     MINIMUM_AGE: int = 18
 
-    # --- storage (Cloudflare R2) -------------------------------------------
-    R2_ACCOUNT_ID: str = ""
-    R2_ACCESS_KEY_ID: str = ""
-    R2_SECRET_ACCESS_KEY: str = ""
-    R2_BUCKET: str = "kls-academy"
-    R2_PUBLIC_BASE_URL: str = ""
-
+    # --- storage -----------------------------------------------------------
+    # Where offer letters, certificates, chapter notes and task screenshots are
+    # written. There is no object store behind this: **the directory is the
+    # only copy of every student document.**
+    #
+    # In production it must point somewhere outside the deployment directory —
+    # `/srv/kls/media`, not `./media` — because a redeploy replaces the code
+    # tree, and a media folder living inside it would go with it. It must also
+    # be in the backup; `docs/DEPLOYMENT.md` covers both.
+    MEDIA_ROOT: str = "media"
 
     # --- email -------------------------------------------------------------
     SMTP_HOST: str = ""
@@ -74,10 +79,30 @@ class Settings(BaseSettings):
         return self.ENVIRONMENT == "production"
 
     @property
-    def storage_configured(self) -> bool:
-        return bool(self.R2_ACCESS_KEY_ID and self.R2_SECRET_ACCESS_KEY)
+    def is_remote_database(self) -> bool:
+        """
+        True when Postgres is on another machine — Supabase, or any managed
+        host. Changes how the connection pool is tuned, because a socket
+        crossing the internet gets closed by things that never touch a local
+        one, and it decides whether TLS is demanded at startup.
 
+        Parsed rather than substring-matched. The first version of this asked
+        whether the URL contained "@localhost", which answered *true* for
+        `sqlite:///./test.db` — no host at all — and then handed psycopg's
+        `connect_timeout` to SQLite, which rejects it. A driver with no network
+        is not a remote database.
+        """
+        try:
+            url = make_url(self.DATABASE_URL)
+        except Exception:  # noqa: BLE001 — an unparseable URL fails later, louder
+            return False
 
+        if not url.drivername.startswith("postgresql"):
+            return False
+
+        # No host means a Unix socket on this machine.
+        host = (url.host or "").lower()
+        return bool(host) and host not in ("localhost", "127.0.0.1", "::1", "db")
 
     def validate_for_runtime(self) -> list[str]:
         """
@@ -101,6 +126,26 @@ class Settings(BaseSettings):
                 problems.append("CORS_ORIGINS contains a plain-http origin")
             if not self.FIRST_SUPERADMIN_PASSWORD:
                 problems.append("FIRST_SUPERADMIN_PASSWORD is not set")
+
+            # The media directory is the only copy of every offer letter and
+            # certificate. Inside the deployment tree it is one `git clean` or
+            # one redeploy from being gone.
+            if not Path(self.MEDIA_ROOT).is_absolute():
+                problems.append(
+                    f"MEDIA_ROOT ({self.MEDIA_ROOT!r}) is a relative path. In "
+                    "production set an absolute path outside the code "
+                    "directory, e.g. /srv/kls/media — a redeploy would "
+                    "otherwise take every stored document with it"
+                )
+
+            # Supabase and every other managed Postgres require TLS. psycopg
+            # will happily connect without it if the server allows, and then
+            # the credentials and every row cross the internet in clear text.
+            if self.is_remote_database and "sslmode=" not in self.DATABASE_URL:
+                problems.append(
+                    "DATABASE_URL points at a remote host but sets no sslmode. "
+                    "Append ?sslmode=require"
+                )
 
         return problems
 

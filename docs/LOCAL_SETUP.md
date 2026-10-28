@@ -42,7 +42,7 @@ doesn't ship. This is fine and expected. The API detects it and stores documents
 instead of PDF, so nothing breaks. To install the rest without it:
 
 ```powershell
-pip install fastapi uvicorn[standard] python-multipart sqlalchemy alembic psycopg[binary] pydantic pydantic-settings email-validator pyjwt argon2-cffi boto3 razorpay qrcode[pil] jinja2 httpx
+pip install -r requirements.txt
 ```
 
 ---
@@ -69,7 +69,7 @@ FIRST_SUPERADMIN_EMAIL=admin@klstechsolutions.in
 FIRST_SUPERADMIN_PASSWORD=<choose a real password>
 ```
 
-Leave everything else as it is. R2, Razorpay and SMTP are all optional — the API
+Leave everything else as it is. SMTP is optional — the API
 degrades gracefully without them.
 
 ---
