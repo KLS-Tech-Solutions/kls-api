@@ -73,7 +73,10 @@ def only(outbox, fragment: str) -> dict:
 def test_every_email_tells_people_to_check_spam(client, outbox):
     client.post("/api/v1/auth/register", json=STUDENT)
 
-    message = only(outbox, "verify your email")
+    # Registration now sends a welcome, not a verification request. The
+    # guidance itself comes from the shared layout, so this still covers every
+    # email the platform sends.
+    message = only(outbox, "welcome")
     assert "Spam" in message["html"] and "Junk" in message["html"]
     assert "Bin" in message["html"]
     assert "Spam, Junk or Bin" in message["text"]
@@ -82,7 +85,7 @@ def test_every_email_tells_people_to_check_spam(client, outbox):
 def test_emails_are_sent_as_html_and_plain_text(client, outbox):
     client.post("/api/v1/auth/register", json=STUDENT)
 
-    message = only(outbox, "verify your email")
+    message = only(outbox, "welcome")
     assert message["html"].lstrip().startswith("<!doctype html>")
     assert "KLS ACADEMY" in message["html"]
     # A plain-text alternative matters: some clients and filters reject

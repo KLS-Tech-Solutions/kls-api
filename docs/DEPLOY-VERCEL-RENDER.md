@@ -1,283 +1,319 @@
-# Deploying to Vercel + Render
+# Deploying KLS Academy — Vercel + Render + Supabase
 
-Frontends on Vercel, API on Render, database on Supabase.
-
-**Yes, this works — but not with the code exactly as it stands.** Render's free
-tier has an ephemeral filesystem, and this application currently writes PDFs
-and screenshots to local disk. §0 is the prerequisite work. Skip it and the
-deployment will appear to succeed and then quietly lose files.
-
-Read §0 and §1 before creating any account.
+Two frontends on Vercel, the API on Render, the database on Supabase. All three
+free tiers. This is written against the DNS you already have at your registrar.
 
 ---
 
-## 0. Prerequisites — two code changes
+## 0. Where you already are
 
-Render's free instances are wiped on **every restart and every redeploy**, and
-free instances also spin down after about 15 minutes of inactivity, so restarts
-are routine rather than rare.
+Your zone currently holds:
 
-What that does to each file this app writes:
+| Type | Name | Points at | Status |
+|---|---|---|---|
+| CNAME | `academy` | `…vercel-dns-017.com` | Vercel — academy project |
+| CNAME | `admin` | `…vercel-dns-017.com` | Vercel — admin project |
+| CNAME | `www` | `…vercel-dns-017.com` | Vercel |
+| A | `@` | `76.76.21.21` | Vercel apex |
+| TXT | `_vercel` ×2 | domain verification | Vercel |
+| TXT | `@` ×2 | google-site-verification | Search Console |
 
-| File | On restart | Verdict |
-|---|---|---|
-| Offer letters, certificates | Regenerate from the database record on next download | Safe already |
-| **Chapter PDFs** | Gone. Rows remain, downloads 404 | **Must fix** |
-| **Task screenshots** | Gone permanently. Nothing can rebuild them | **Must fix** |
+So both frontend domains are already delegated to Vercel. Good.
 
-### 0.1 Move chapter PDFs into Postgres
+### The record you are missing
 
-Eighteen chapters at roughly 550 KB each is about 10 MB. Supabase's free plan
-allows 500 MB, so even a hundred chapters is comfortable. Storing them as a
-`bytea` column removes the last thing on disk that cannot be rebuilt, and they
-are then covered by the database backup you already take.
+**There is no `api` record.** Nothing resolves `api.klstechsolutions.in`, so
+both frontends will have nowhere to send requests. You add it in §2 once Render
+gives you a hostname — it cannot be created before the service exists.
 
-The alternative is Supabase Storage (1 GB free), which keeps blobs out of the
-database at the cost of one more integration. Either closes the hole; the
-column is less work.
-
-### 0.2 Remove task screenshots
-
-You have already decided on this: GitHub link plus written explanation, no
-image uploads. The backend supports it per task today — `min_screenshots` and
-`max_screenshots` are columns, and the LinkedIn step already uses `0/0`. What
-is needed:
-
-- the seeder sets `min_screenshots=0, max_screenshots=0` on every task
-- `max_screenshots` relaxes from `ge=1` to `ge=0` in the admin update schema,
-  so the console can set it too
-- the submission form hides the uploader when `max_screenshots === 0` (it
-  currently renders it unconditionally and hardcodes a minimum of three)
-- copy sweep: curriculum task requirements, the terms and privacy pages, and
-  the FAQ in `seo.ts` all mention screenshots
-
-Once both are done, nothing the application cannot rebuild lives on disk, and
-Render's ephemeral filesystem stops mattering.
+> One thing to confirm, not a problem: `@` and `www` now point at Vercel. If
+> your main company site at `www.klstechsolutions.in` used to be hosted
+> elsewhere, it has moved. The academy footer links to that address, so check
+> it still loads what you expect.
 
 ---
 
-## 1. Two things to know before you commit to this
+## 1. Before you deploy — one blocker
 
-### Render free spins down
+Render's free tier has an **ephemeral filesystem**. It is wiped on every
+restart and every redeploy, and free instances sleep after ~15 minutes idle, so
+restarts are routine.
 
-After ~15 minutes idle, the instance sleeps. The next request wakes it, and the
-cold start takes **up to a minute** — during which a student sees a hanging
-page. For an MVP shown to a handful of people that is survivable. For a public
-launch it is not, and Render's paid starter tier removes it.
+What that does to each thing this app writes to `MEDIA_ROOT`:
 
-A monitor pinging `/health` every 5 minutes keeps it awake and, conveniently,
-also keeps your Supabase project from pausing. That is two problems solved by
-one uptime check, and it is why §6 is not optional.
+| File | After a restart |
+|---|---|
+| Offer letters, certificates | Fine — regenerated from the database record on next download |
+| **Chapter PDFs** | Gone. Rows remain, downloads 404 |
+| **Task screenshots** | Gone permanently. Nothing can rebuild them |
 
-### Vercel's Hobby plan bars commercial use
+### The bridge that lets you launch this week
 
-Vercel's fair-use guidelines limit Hobby to non-commercial personal use, and
-the definition reportedly extends to any deployment used for the financial gain
-of anyone involved — including where a paid employee or consultant wrote the
-code. KLS Academy is an MSME's product. Vercel can disable Hobby deployments at
-its discretion and without notice.
+Add the chapter re-render to the **start command** (§2). Every boot then
+re-creates the 18 curriculum PDFs from `scripts/curriculum/` in about ten
+seconds, and chapter downloads survive restarts with no code change:
 
-Your options, honestly: accept the risk, pay for Pro at $20/user/month, or put
-the two frontends on **Cloudflare Pages or Netlify**, neither of which has that
-restriction. This guide uses Vercel because you asked for it; the decision is
-yours to take knowingly.
+```
+alembic upgrade head && python scripts/seed_content.py --pdfs-only && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+Two things this does **not** fix, and you should know both:
+
+- **A PDF an admin uploads through the console is overwritten on the next
+  restart** by the curriculum version, for chapters 1–3 of each domain. Until
+  storage is durable, treat the admin chapter upload as "for new chapters
+  only", not for replacing the seeded ones.
+- **Task screenshots are still lost.** You already decided to drop screenshots
+  in favour of the GitHub link; until that change ships, a student's
+  submission images disappear on the next restart.
+
+The real fix is moving chapter PDFs into Postgres — roughly 10 MB for 18
+chapters against Supabase's 500 MB, and then covered by your database backup.
+Do it when you have a working shell; the bridge above is honest enough for an
+MVP in the meantime.
 
 ---
 
 ## 2. Backend on Render
 
-1. **New → Web Service**, connect the `kls-api` repository.
-2. Settings:
+### 2.1 Create the service
 
-   | Field | Value |
-   |---|---|
-   | Runtime | Python 3 |
-   | Build command | `pip install -r requirements.txt` |
-   | Start command | `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
-   | Instance type | Free |
-   | Region | Singapore — closest to India of Render's options |
+**New → Web Service**, connect the `kls-api` repository.
 
-   The port **must** be `$PORT`. Render assigns it; a hardcoded 8000 means the
-   health check never passes and the deploy hangs on "in progress".
+| Field | Value |
+|---|---|
+| Name | `kls-api` |
+| Language | Python 3 |
+| Region | **Singapore** — closest to India of Render's options |
+| Branch | `main` (or `dev`, whichever you deploy from) |
+| Build command | `pip install -r requirements.txt` |
+| Start command | see below |
+| Instance type | **Free** |
 
-3. Environment variables:
+Start command — one line:
+
+```
+alembic upgrade head && python scripts/seed_content.py --pdfs-only && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+`--port $PORT` is not optional. Render assigns the port; hardcode 8000 and the
+health check never passes, and the deploy sits on "in progress" until it times
+out.
+
+### 2.2 Environment variables
 
 ```ini
 ENVIRONMENT=production
 DEBUG=false
-SECRET_KEY=<generate: python -c "import secrets; print(secrets.token_urlsafe(48))">
+SECRET_KEY=<python -c "import secrets; print(secrets.token_urlsafe(48))">
 
 DATABASE_URL=postgresql+psycopg://postgres.<ref>:<password>@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require
 
 CORS_ORIGINS=https://academy.klstechsolutions.in,https://admin.klstechsolutions.in
 MINIMUM_AGE=18
-
 MEDIA_ROOT=/tmp/kls-media
 
-SMTP_HOST=...
+SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USER=...
-SMTP_PASSWORD=...
+SMTP_USER=klstechsolutions2025@gmail.com
+SMTP_PASSWORD=<Gmail app password, not your account password>
 EMAIL_FROM=KLS Academy <klstechsolutions2025@gmail.com>
 
 ACADEMY_BASE_URL=https://academy.klstechsolutions.in
 ADMIN_BASE_URL=https://admin.klstechsolutions.in
 
 FIRST_SUPERADMIN_EMAIL=admin@klstechsolutions.in
-FIRST_SUPERADMIN_PASSWORD=<generate one>
+FIRST_SUPERADMIN_PASSWORD=<generate one, store it in the password manager>
 ```
 
-`MEDIA_ROOT=/tmp/kls-media` is deliberate and only correct **after §0**. It
-says: this directory is scratch space, everything in it is rebuildable. Note
-that `app/core/config.py` refuses to start in production on a relative
-`MEDIA_ROOT`, so an absolute path is required regardless.
+`MEDIA_ROOT=/tmp/kls-media` is deliberate: it declares the directory to be
+scratch. An absolute path is required regardless — `config.py` refuses to start
+in production on a relative one.
 
-4. Deploy. Watch the log for `alembic upgrade head` completing, then uvicorn
-   starting. A config problem fails loudly in the first ten lines with a
-   readable message — the validator in `config.py` is written for this moment.
+For Gmail SMTP you need an **app password** from your Google account, with
+2-step verification on. Your normal password will be rejected.
 
-5. Once live, run the seeds from Render's **Shell** tab:
+### 2.3 First deploy
+
+Deploy and watch the log. You want to see `alembic upgrade head` complete, then
+uvicorn start. A configuration problem fails in the first ten lines with a
+readable message naming the variable — `config.py` is written for this moment.
+
+Then open Render's **Shell** tab and seed:
 
 ```bash
-python scripts/seed.py
-python scripts/seed_content.py
+python scripts/seed.py          # super admin + email template rows
+python scripts/seed_content.py  # 6 streams, tasks, 18 chapters + PDFs
 ```
 
-Both need the `sys.path` bootstrap added when CI caught this — without it they
-fail with `ModuleNotFoundError: No module named 'app'`. Make sure that commit
-is pushed.
+Run `seed_content.py` in full **once** — the start command only does
+`--pdfs-only`, which re-renders files for chapters that already exist and
+creates nothing.
 
-6. Confirm: `https://<service>.onrender.com/health` returns
-   `{"status":"ok","environment":"production"}`.
+Confirm: `https://kls-api.onrender.com/health` returns
+`{"status":"ok","environment":"production"}`.
+
+### 2.4 Add the custom domain
+
+Render → your service → **Settings → Custom Domains → Add**
+`api.klstechsolutions.in`. Render shows you a CNAME target.
+
+**Now add the missing DNS record** at your registrar:
+
+| Type | Name | Content | TTL |
+|---|---|---|---|
+| CNAME | `api` | `kls-api.onrender.com` *(use the exact target Render shows)* | 14400 |
+
+Wait for propagation, then check:
+
+```powershell
+nslookup api.klstechsolutions.in
+curl https://api.klstechsolutions.in/health
+```
+
+Render issues the TLS certificate automatically once the CNAME resolves.
 
 ---
 
 ## 3. Frontends on Vercel
 
-Two separate Vercel projects from two repositories. Same steps for each.
+Two separate projects, same steps. Your domains are already attached — this is
+about configuring them.
 
-1. **Add New → Project**, import the repository. Vercel detects Next.js; leave
-   the build settings alone.
-2. Environment variables — set for **Production, Preview and Development**:
+### 3.1 Environment variables
 
+For **each** project, set these for **Production, Preview and Development**:
+
+**Academy project:**
 ```ini
-API_BASE_URL=https://<your-render-service>.onrender.com/api/v1
+API_BASE_URL=https://api.klstechsolutions.in/api/v1
 NEXT_PUBLIC_MIXPANEL_TOKEN=
 ```
 
-`API_BASE_URL` has no `NEXT_PUBLIC_` prefix on purpose. The browser never
-calls the API directly — it calls Next route handlers, which hold the httpOnly
-cookies and proxy onward. Prefixing it would compile the value into the client
-bundle and hand the API URL to every visitor, which is not a secret but is not
-information to publish either.
+**Admin project:**
+```ini
+API_BASE_URL=https://api.klstechsolutions.in/api/v1
+```
 
-3. Deploy. Repeat for the admin dashboard.
+`API_BASE_URL` has no `NEXT_PUBLIC_` prefix on purpose. The browser never calls
+the API directly — it calls Next route handlers, which hold the httpOnly
+session cookies and proxy onward. Prefixing it would compile the value into the
+client bundle.
 
-4. Add your domains: `academy.klstechsolutions.in` on the academy project,
-   `admin.klstechsolutions.in` on the admin project, then the CNAME records
-   Vercel shows you.
+### 3.2 Redeploy
+
+Environment variables only take effect on a new build. After setting them:
+**Deployments → ⋯ → Redeploy** on each project. Skipping this is the most
+common reason a correctly configured Vercel project still fails.
 
 ---
 
 ## 4. Close the CORS loop
 
-Until the domains exist, Render's `CORS_ORIGINS` is pointing at names that do
-not resolve. Once Vercel gives you URLs, go back and set it to exactly the
-origins in use:
+The API only accepts browser requests from origins it has been told about. You
+set `CORS_ORIGINS` in §2.2; verify it matches exactly:
 
 ```ini
 CORS_ORIGINS=https://academy.klstechsolutions.in,https://admin.klstechsolutions.in
 ```
 
-While testing on `*.vercel.app` subdomains, add those too — comma separated, no
-spaces, no trailing slash, scheme included. The API refuses to start in
-production if any origin is plain `http://`.
+Scheme included, no trailing slash, no spaces after the commas. If you are also
+testing on the `*.vercel.app` preview URLs, add those too. The API refuses to
+start in production if any origin is plain `http://`.
 
-Render restarts on an environment change. Give it a minute.
+Render restarts on an environment change — give it a minute.
 
 ---
 
-## 5. Verify, in this order
+## 5. Verify, in order
 
-```bash
-curl https://<service>.onrender.com/health
+```powershell
+curl https://api.klstechsolutions.in/health
 curl -I https://academy.klstechsolutions.in
+curl -I https://admin.klstechsolutions.in
 ```
 
-Then in a browser, end to end:
+Then in a browser:
 
-- [ ] Landing page lists six internship domains
-- [ ] Register — and **confirm the error messages read correctly**: a taken
-      email appears under the email field, not as a banner; a wrong password on
-      sign-in says "Incorrect email or password" rather than anything about
-      sessions expiring
-- [ ] Verification email arrives (check Spam, Junk and Bin)
-- [ ] The link in it signs you in
-- [ ] Enrol; the offer letter PDF downloads and opens
-- [ ] Open a chapter, then download it
-- [ ] Sign in to the admin console; Catalogue → Notes shows 18 chapters
+- [ ] Landing page lists **six** internship domains
+- [ ] Register an account — no verification step; it lands on sign-in
+- [ ] A **taken email** shows the error under the email field, not as a banner
+- [ ] A **wrong password** says "Incorrect email or password" — not anything
+      about sessions expiring
+- [ ] Sign in with the password you just chose; it works immediately
+- [ ] Welcome email arrives (check Spam, Junk and Bin)
+- [ ] Enrol in a domain; the offer letter PDF downloads and opens
+- [ ] Open a chapter, then **Download** it
+- [ ] Admin console: sign in, Catalogue → Notes shows 18 chapters
 - [ ] Submit a task; it appears in the admin review queue
-- [ ] Approve the last task; the certificate issues immediately
+- [ ] Approve the final task; the certificate issues immediately
 - [ ] The certificate's QR code resolves to the public verification page
 
-**Then restart the Render service by hand and run the chapter download again.**
-That is the test that proves §0 was done properly. If the PDF still opens, your
-storage is genuinely stateless. If it 404s, chapter PDFs are still on disk.
+**Then restart the Render service by hand and download a chapter again.** That
+is the test that proves the §1 bridge works. If it 404s, the start command is
+wrong.
 
 ---
 
-## 6. Keep both free tiers alive
+## 6. Keep both free tiers awake — not optional
 
-Not optional, and one action covers both:
+One action solves two problems. Point an uptime monitor (UptimeRobot's free
+tier is enough) at:
 
-Point an uptime monitor — UptimeRobot's free tier is enough — at
-`https://<service>.onrender.com/health` every **5 minutes**.
+```
+https://api.klstechsolutions.in/health      every 5 minutes
+```
 
-- It stops Render spinning down, so students never hit a 60-second cold start.
-- It keeps the Supabase project active, which otherwise **pauses after 7 days
-  idle** and needs restoring by hand.
-- It tells you when the site is down.
+- Stops Render spinning down, so students never hit a 60-second cold start
+- Keeps the Supabase project active — a free project **pauses after 7 days
+  idle** and has to be restored by hand
+- Tells you when the site is down
 
 ---
 
 ## 7. Backups are entirely yours
 
-Supabase's free plan takes **no automatic backups**. Render stores nothing
-durable. After §0 the only thing that matters is the database, so a single
-nightly dump covers the whole system — which is the one upside of going
-stateless.
-
-From any machine that can reach Supabase:
+Supabase free takes **no automatic backups**. Render stores nothing durable. So
+the database is the only thing that matters, and one nightly dump covers it:
 
 ```bash
 pg_dump -Fc "$DATABASE_URL" > kls_$(date -u +%Y%m%d).dump
 ```
 
-Schedule it, send the file somewhere off-platform, and **restore it once** to
-prove it works. `docs/DEPLOYMENT.md` §8.3 has the rehearsal.
+Run it on a schedule from any machine that can reach Supabase, keep the files
+off-platform, and **restore one once** to prove it works —
+`docs/DEPLOYMENT.md` §8.3 has the rehearsal.
 
 ---
 
-## 8. When something is wrong
+## 8. When something goes wrong
 
 | Symptom | Cause |
 |---|---|
-| Deploy hangs on "in progress" | Start command is not binding `$PORT` |
-| First request takes ~60s | Free tier cold start. §6 |
-| CORS error in the browser console | `CORS_ORIGINS` missing that exact origin, scheme included |
-| `ModuleNotFoundError: No module named 'app'` | Seed scripts missing the `sys.path` bootstrap |
-| Chapter downloads 404 after a redeploy | §0.1 not done |
-| 500 on login after idle | Supabase project paused, or pooler connection dropped. §6 |
-| Service won't start, config error in log | Read it — `config.py` names the exact variable |
+| Deploy stuck on "in progress" | Start command not binding `$PORT` |
+| First request takes ~60s | Free-tier cold start. §6 |
+| CORS error in the console | `CORS_ORIGINS` missing that exact origin |
+| Frontend calls fail, `api.` doesn't resolve | The missing CNAME. §2.4 |
+| Env var change had no effect | Vercel needs a redeploy. §3.2 |
+| `ModuleNotFoundError: No module named 'app'` | Seed scripts missing the `sys.path` bootstrap — make sure that commit is pushed |
+| Chapter downloads 404 after a redeploy | Start command missing `--pdfs-only`. §1 |
+| 500s after the site has been idle | Supabase paused, or a dropped pooler connection. §6 |
+| SMTP auth fails | Gmail needs an **app password**, not the account password |
 
 ---
 
 ## What this costs
 
-Everything above is $0: Render free, Vercel Hobby, Supabase free, UptimeRobot
-free. The honest caveats are the three already stated — Render's cold starts,
-Vercel's commercial-use restriction, and the fact that backups are on you.
+Zero: Render free, Vercel Hobby, Supabase free, UptimeRobot free.
 
-The first upgrade worth paying for, when students are relying on it, is
-Render's paid tier to remove cold starts. Supabase Pro at $25/month for managed
-daily backups is the second.
+Three honest caveats. Render's cold starts, which §6 mitigates. Backups being
+entirely your responsibility. And **Vercel's Hobby plan is limited to
+non-commercial personal use** — the definition reportedly extends to any
+deployment used for the financial gain of anyone involved, including where a
+paid employee wrote the code, and Vercel can disable Hobby projects at its
+discretion. KLS Academy is an MSME's product. Cloudflare Pages and Netlify
+carry no such restriction if you would rather not hold that risk.
+
+First thing worth paying for, once students depend on it: Render's paid tier to
+remove cold starts. Supabase Pro at $25/month for managed daily backups is
+second.
